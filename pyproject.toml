@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ots-compression-research"
+version = "0.1.0"
+description = "Research infrastructure for lossless compression of gradient traces"
+requires-python = ">=3.9"
+dependencies = [
+    "psutil>=5.9",
+    "torch>=2.3",
+]
+
+[project.optional-dependencies]
+baselines = [
+    "lz4>=4.0",
+    "python-snappy>=0.6",
+    "zstandard>=0.19",
+]
+training = [
+    "datasets>=2.0",
+    "torchaudio>=2.0",
+    "torchvision>=0.15",
+]
+test = ["pytest>=7"]
+
+[project.scripts]
+ots-baselines = "ots_compression.compression.cli:main"
+ots-train = "ots_compression.nn_training.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+testpaths = ["tests"]
