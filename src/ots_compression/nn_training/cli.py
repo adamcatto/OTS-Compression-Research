@@ -16,6 +16,7 @@ from .tasks import default_task_registry
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--meta-config", type=Path)
     parser.add_argument("--experiment-number", type=int)
     parser.add_argument("--experiments-dir", type=Path)
     parser.add_argument("--datasets-dir", type=Path)
@@ -29,7 +30,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         experiments_dir=arguments.experiments_dir or configured.experiments_dir,
         datasets_dir=arguments.datasets_dir or configured.datasets_dir,
     )
-    spec = load_experiment_spec(arguments.config)
+    spec = load_experiment_spec(
+        arguments.config, meta_config_path=arguments.meta_config
+    )
     task = default_task_registry().get(spec.task)
     result = run_training(
         spec,
@@ -55,4 +58,3 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

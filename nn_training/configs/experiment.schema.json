@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OTS training experiment configuration",
+  "description": "Allowed values and variant-specific sub-configurations for runnable OTS training experiments.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "domain",
+    "task",
+    "dataset",
+    "model",
+    "optimizer",
+    "training",
+    "seed"
+  ],
+  "properties": {
+    "domain": {
+      "enum": ["vision", "nlp", "audio"]
+    },
+    "task": {
+      "enum": [
+        "vision.classification",
+        "vision.segmentation",
+        "nlp.causal_lm",
+        "speech.commands"
+      ]
+    },
+    "dataset": {
+      "type": "object"
+    },
+    "model": {
+      "type": "object"
+    },
+    "optimizer": {
+      "$ref": "schema/optimization.schema.json#/$defs/optimizer"
+    },
+    "scheduler": {
+      "$ref": "schema/run.schema.json#/$defs/scheduler"
+    },
+    "training": {
+      "$ref": "schema/run.schema.json#/$defs/training"
+    },
+    "initialization": {
+      "$ref": "schema/run.schema.json#/$defs/initialization"
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "notes": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "task": {
+            "const": "vision.classification"
+          }
+        },
+        "required": ["task"]
+      },
+      "then": {
+        "properties": {
+          "domain": {
+            "const": "vision"
+          },
+          "dataset": {
+            "$ref": "schema/tasks.schema.json#/$defs/cifar10Dataset"
+          },
+          "model": {
+            "oneOf": [
+              {
+                "$ref": "schema/tasks.schema.json#/$defs/smallConvNet"
+              },
+              {
+                "$ref": "schema/tasks.schema.json#/$defs/tinyVisionTransformer"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "task": {
+            "const": "vision.segmentation"
+          }
+        },
+        "required": ["task"]
+      },
+      "then": {
+        "properties": {
+          "domain": {
+            "const": "vision"
+          },
+          "dataset": {
+            "$ref": "schema/tasks.schema.json#/$defs/cityscapesDataset"
+          },
+          "model": {
+            "$ref": "schema/tasks.schema.json#/$defs/smallUNet"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "task": {
+            "const": "nlp.causal_lm"
+          }
+        },
+        "required": ["task"]
+      },
+      "then": {
+        "properties": {
+          "domain": {
+            "const": "nlp"
+          },
+          "dataset": {
+            "$ref": "schema/tasks.schema.json#/$defs/wikiTextDataset"
+          },
+          "model": {
+            "$ref": "schema/tasks.schema.json#/$defs/causalTransformer"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "task": {
+            "const": "speech.commands"
+          }
+        },
+        "required": ["task"]
+      },
+      "then": {
+        "properties": {
+          "domain": {
+            "const": "audio"
+          },
+          "dataset": {
+            "$ref": "schema/tasks.schema.json#/$defs/speechCommandsDataset"
+          },
+          "model": {
+            "$ref": "schema/tasks.schema.json#/$defs/smallConformer"
+          }
+        }
+      }
+    }
+  ],
+  "x-ots-catalog": {
+    "optimizers": {
+      "implemented": ["adam", "adamw", "sgd", "rmsprop"],
+      "planned": [
+        {
+          "name": "muon_clip",
+          "schema": "schema/optimization.schema.json#/$defs/plannedMuonClipOptimizer",
+          "reason": "Requires Muon parameter routing plus model-aware per-head QK clipping."
+        }
+      ]
+    }
+  }
+}

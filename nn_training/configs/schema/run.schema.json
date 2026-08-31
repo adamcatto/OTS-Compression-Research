@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "scheduler": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "const": "constant"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": {
+              "const": "cosine"
+            },
+            "min_lr": {
+              "$ref": "common.schema.json#/$defs/nonnegativeNumber"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": {
+              "const": "warmup_cosine"
+            },
+            "warmup_steps": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "min_factor": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      ]
+    },
+    "training": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["steps", "batch_size"],
+      "properties": {
+        "steps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "num_workers": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "precision": {
+          "enum": ["fp32", "fp16", "bf16"]
+        },
+        "device": {
+          "oneOf": [
+            {
+              "enum": ["auto", "cpu", "cuda", "mps"]
+            },
+            {
+              "type": "string",
+              "pattern": "^cuda:[0-9]+$"
+            }
+          ]
+        },
+        "gradient_clip_norm": {
+          "$ref": "common.schema.json#/$defs/positiveNumber"
+        },
+        "gradient_accumulation_steps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "gradient_capture": {
+          "description": "optimizer_input is the default and records after AMP unscaling and clipping; backward_output records immediately after backward.",
+          "enum": ["optimizer_input", "backward_output"]
+        },
+        "deterministic": {
+          "type": "boolean"
+        },
+        "durable_gradients": {
+          "type": "boolean"
+        }
+      }
+    },
+    "initialization": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "const": "random"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "path"],
+          "properties": {
+            "source": {
+              "const": "checkpoint"
+            },
+            "path": {
+              "$ref": "common.schema.json#/$defs/path"
+            },
+            "state_dict_key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "strict": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
