@@ -1,0 +1,47 @@
+{
+  "domain": "audio",
+  "task": "speech.commands",
+  "dataset": {
+    "name": "speech_commands",
+    "download": true,
+    "samples": 16000
+  },
+  "model": {
+    "architecture": "small_conformer",
+    "num_classes": 35,
+    "sample_rate": 16000,
+    "n_fft": 400,
+    "hop_length": 160,
+    "dimension": 144,
+    "depth": 4,
+    "heads": 4,
+    "feedforward_dimension": 576,
+    "convolution_kernel": 15,
+    "dropout": 0.0
+  },
+  "optimizer": {
+    "name": "adamw",
+    "lr": 0.0005,
+    "weight_decay": 0.01
+  },
+  "scheduler": {
+    "name": "warmup_cosine",
+    "warmup_steps": 100,
+    "min_factor": 0.05
+  },
+  "training": {
+    "steps": 1000,
+    "batch_size": 32,
+    "num_workers": 4,
+    "precision": "fp32",
+    "device": "auto",
+    "gradient_clip_norm": 5.0
+  },
+  "initialization": {
+    "source": "random"
+  },
+  "environment": {},
+  "seed": 5,
+  "tags": ["baseline", "speech", "conformer"]
+}
+
