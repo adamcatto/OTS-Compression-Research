@@ -1,8 +1,9 @@
 # OTS Compression Research
 
-Research infrastructure for losslessly compressing gradient time series. A
-training run writes an append-only, uncompressed trace; baseline and candidate
-compressors consume the same bytes through a shared online/offline API.
+OTS stands for **Online Tensor Streaming**. This repository provides research
+infrastructure for losslessly compressing gradient time series. A training run
+writes an append-only, uncompressed trace; baseline and candidate compressors
+consume the same bytes through a shared online/offline API.
 
 ## Repository areas
 
