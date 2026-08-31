@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 baselines = [
+    "cramjam>=2.11",
     "lz4>=4.0",
     "python-snappy>=0.6",
     "zstandard>=0.19",

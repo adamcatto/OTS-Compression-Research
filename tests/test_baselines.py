@@ -7,6 +7,7 @@ from ots_compression.compression import AccessMode, MissingCodecDependency
 from ots_compression.compression.algorithms.baselines import (
     DeflateCompressor,
     RawCompressor,
+    SnappyCompressor,
     ZstdCompressor,
 )
 from ots_compression.compression.evaluation import benchmark_trace
@@ -50,5 +51,15 @@ def test_zstd_round_trip_when_available(trace_path: Path, mode: AccessMode) -> N
         compressor = ZstdCompressor()
     except MissingCodecDependency:
         pytest.skip("zstandard is not installed")
+    metrics = benchmark_trace(trace_path, compressor, mode)
+    assert metrics.exact_roundtrip
+
+
+@pytest.mark.parametrize("mode", list(AccessMode))
+def test_snappy_round_trip_when_available(trace_path: Path, mode: AccessMode) -> None:
+    try:
+        compressor = SnappyCompressor()
+    except MissingCodecDependency:
+        pytest.skip("python-snappy is not installed")
     metrics = benchmark_trace(trace_path, compressor, mode)
     assert metrics.exact_roundtrip
