@@ -28,11 +28,16 @@ def trace_path(tmp_path: Path) -> Path:
 @pytest.mark.parametrize("mode", list(AccessMode))
 @pytest.mark.parametrize("compressor", [RawCompressor(), DeflateCompressor()])
 def test_baselines_round_trip(trace_path: Path, mode: AccessMode, compressor) -> None:
-    metrics = benchmark_trace(trace_path, compressor, mode, io_chunk_size=128)
+    artifact = trace_path.parent / f"{compressor.name}-{mode.value}.otsc"
+    metrics = benchmark_trace(
+        trace_path, compressor, mode, artifact_path=artifact, io_chunk_size=128
+    )
 
     assert metrics.exact_roundtrip
     assert metrics.uncompressed_bytes == trace_path.stat().st_size
     assert metrics.total_compressed_bytes > 0
+    assert artifact.is_file()
+    assert artifact.stat().st_size == metrics.compressed_payload_bytes
     if mode is AccessMode.ONLINE:
         assert metrics.mean_step_latency_seconds is not None
     else:

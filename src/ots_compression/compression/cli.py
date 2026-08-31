@@ -10,7 +10,7 @@ from typing import Optional, Sequence
 from ..core.settings import Settings
 from .algorithms.baselines import baseline_registry
 from .api import AccessMode
-from .evaluation import benchmark_trace, write_metrics
+from .evaluation import benchmark_trace, write_metrics, write_metrics_table
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -69,24 +69,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     modes = [AccessMode(value) for value in (arguments.mode or ["online", "offline"])]
 
     results = []
+    metrics_results = []
     for name in names:
         compressor = registry[name]
         for mode in modes:
-            metrics = benchmark_trace(trace, compressor, mode)
-            destination = experiment / "baselines" / name / mode.value / "metrics.json"
-            write_metrics(metrics, destination)
+            destination = experiment / "baselines" / name / mode.value
+            artifact = destination / "compressed.otsc"
+            metrics = benchmark_trace(
+                trace, compressor, mode, artifact_path=artifact
+            )
+            metrics_path = destination / "metrics.json"
+            write_metrics(metrics, metrics_path)
+            metrics_results.append(metrics)
             results.append(
                 {
                     "algorithm": name,
+                    "artifact": str(artifact),
                     "compression_ratio": metrics.compression_ratio,
-                    "metrics": str(destination),
+                    "metrics": str(metrics_path),
                     "mode": mode.value,
                 }
             )
+    write_metrics_table(metrics_results, experiment / "baselines")
     print(json.dumps(results, indent=2, sort_keys=True))
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

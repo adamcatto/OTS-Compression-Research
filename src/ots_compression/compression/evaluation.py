@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import statistics
@@ -121,6 +122,7 @@ def benchmark_trace(
     compressor: Compressor,
     mode: AccessMode,
     *,
+    artifact_path: Optional[Path] = None,
     io_chunk_size: int = 4 * 1024 * 1024,
     memory_sample_interval_seconds: float = 0.01,
 ) -> BenchmarkMetrics:
@@ -149,7 +151,16 @@ def benchmark_trace(
     step_latencies: List[float] = []
     encoder = compressor.encoder(mode, state)
 
-    with tempfile.TemporaryFile(mode="w+b") as encoded_stream:
+    if artifact_path is None:
+        encoded_stream = tempfile.TemporaryFile(mode="w+b")
+        temporary_artifact = None
+    else:
+        artifact_path = Path(artifact_path)
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_artifact = artifact_path.with_suffix(artifact_path.suffix + ".tmp")
+        encoded_stream = temporary_artifact.open("w+b")
+
+    try:
         with _MemorySampler(memory_sample_interval_seconds) as memory:
             encode_started = time.perf_counter()
             for chunk, checkpoint in source_chunks:
@@ -181,6 +192,8 @@ def benchmark_trace(
         decoded_hash.update(decoded)
         decoded_bytes += len(decoded)
         decode_seconds = time.perf_counter() - decode_started
+    finally:
+        encoded_stream.close()
 
     exact_roundtrip = (
         decoded_bytes == uncompressed_bytes
@@ -188,6 +201,8 @@ def benchmark_trace(
     )
     if not exact_roundtrip:
         raise ValueError(f"{compressor.name} failed exact round-trip verification")
+    if temporary_artifact is not None:
+        temporary_artifact.replace(artifact_path)
 
     total_compressed_bytes = compressed_payload_bytes + side_information_bytes
     ratio = (
@@ -243,17 +258,37 @@ def write_metrics(metrics: BenchmarkMetrics, path: Path) -> None:
     temporary.replace(path)
 
 
+def write_metrics_table(metrics: Iterable[BenchmarkMetrics], directory: Path) -> None:
+    """Persist a machine-readable and spreadsheet-friendly benchmark summary."""
+
+    rows = [metric.to_dict() for metric in metrics]
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    json_path = directory / "summary.json"
+    json_path.write_text(
+        json.dumps(rows, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    csv_path = directory / "summary.csv"
+    fieldnames = list(BenchmarkMetrics.__dataclass_fields__)
+    with csv_path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            row["configuration"] = json.dumps(row["configuration"], sort_keys=True)
+            writer.writerow(row)
+
+
 def benchmark_experiment(
     experiment: Experiment,
     compressor: Compressor,
     mode: AccessMode,
 ) -> BenchmarkMetrics:
-    metrics = benchmark_trace(experiment.gradients_path, compressor, mode)
-    destination = (
-        experiment.baseline_results_path
-        / compressor.name
-        / mode.value
-        / "metrics.json"
+    destination = experiment.baseline_results_path / compressor.name / mode.value
+    metrics = benchmark_trace(
+        experiment.gradients_path,
+        compressor,
+        mode,
+        artifact_path=destination / "compressed.otsc",
     )
-    write_metrics(metrics, destination)
+    write_metrics(metrics, destination / "metrics.json")
     return metrics
