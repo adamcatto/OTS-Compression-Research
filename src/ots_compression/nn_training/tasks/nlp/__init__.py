@@ -1,9 +1,9 @@
-"""Small causal language-model training on WikiText."""
+"""Small causal language-model training and fine-tuning on WikiText."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterable, Optional, Tuple
+from typing import Any, Iterable, Mapping, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -103,6 +103,61 @@ class CausalTransformerLM(nn.Module):
         return self.output(self.normalization(hidden))
 
 
+def _transformers():
+    """Import the optional Hugging Face PyTorch integration on demand."""
+
+    try:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except ImportError as exc:
+        raise RuntimeError(
+            "pretrained causal-LM fine-tuning requires the 'transformers' "
+            "training extra"
+        ) from exc
+    return AutoModelForCausalLM, AutoTokenizer
+
+
+def _pretrained_options(config: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    values = dict(config)
+    try:
+        model_name = str(values.pop("pretrained_model"))
+    except KeyError as exc:
+        raise ValueError(
+            "pretrained causal LM requires model.pretrained_model"
+        ) from exc
+    options = {
+        key: values[key]
+        for key in ("revision", "trust_remote_code")
+        if key in values
+    }
+    return model_name, options
+
+
+def _huggingface_tokens(
+    documents: Iterable[str],
+    *,
+    model_config: Mapping[str, Any],
+    max_tokens: Optional[int],
+    cache_dir: Path,
+) -> torch.Tensor:
+    """Tokenize a document stream with the tokenizer matching a checkpoint."""
+
+    _, auto_tokenizer = _transformers()
+    model_name, options = _pretrained_options(model_config)
+    tokenizer_name = str(model_config.get("tokenizer", model_name))
+    tokenizer = auto_tokenizer.from_pretrained(
+        tokenizer_name, cache_dir=str(cache_dir), **options
+    )
+    if tokenizer.eos_token_id is None:
+        raise ValueError("pretrained causal-LM tokenizer must define an EOS token")
+    tokens: list[int] = []
+    for document in documents:
+        tokens.extend(tokenizer.encode(document, add_special_tokens=False))
+        tokens.append(tokenizer.eos_token_id)
+        if max_tokens is not None and len(tokens) >= max_tokens:
+            break
+    return torch.tensor(tokens[:max_tokens], dtype=torch.long)
+
+
 def _wikitext_tokens(
     variant: str,
     split: str,
@@ -153,9 +208,13 @@ class CausalLanguageModelingTask(TrainingTask):
     def build_model(self, spec: ExperimentSpec) -> nn.Module:
         config = dict(spec.model)
         architecture = str(config.pop("architecture"))
-        if architecture != "causal_transformer":
-            raise ValueError(f"unsupported language model architecture: {architecture}")
-        return CausalTransformerLM(**config)
+        if architecture == "causal_transformer":
+            return CausalTransformerLM(**config)
+        if architecture == "huggingface_causal_lm":
+            auto_model, _ = _transformers()
+            model_name, options = _pretrained_options(config)
+            return auto_model.from_pretrained(model_name, **options)
+        raise ValueError(f"unsupported language model architecture: {architecture}")
 
     def build_dataloaders(
         self, spec: ExperimentSpec, datasets_dir: Path
@@ -170,12 +229,44 @@ class CausalLanguageModelingTask(TrainingTask):
             maximum = dataset.get("max_tokens")
             max_tokens = None if maximum is None else int(maximum)
             cache_dir = Path(dataset.get("root", datasets_dir / "huggingface"))
-            train_tokens = _wikitext_tokens(
-                variant, "train", max_tokens, cache_dir
-            )
-            validation_tokens = _wikitext_tokens(
-                variant, "validation", max_tokens, cache_dir
-            )
+            if spec.model.get("architecture") == "huggingface_causal_lm":
+                try:
+                    from datasets import load_dataset
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "WikiText requires the Hugging Face 'datasets' package"
+                    ) from exc
+                train_documents = load_dataset(
+                    "Salesforce/wikitext",
+                    variant,
+                    split="train",
+                    cache_dir=str(cache_dir),
+                )
+                validation_documents = load_dataset(
+                    "Salesforce/wikitext",
+                    variant,
+                    split="validation",
+                    cache_dir=str(cache_dir),
+                )
+                train_tokens = _huggingface_tokens(
+                    (record["text"] for record in train_documents),
+                    model_config=spec.model,
+                    max_tokens=max_tokens,
+                    cache_dir=cache_dir,
+                )
+                validation_tokens = _huggingface_tokens(
+                    (record["text"] for record in validation_documents),
+                    model_config=spec.model,
+                    max_tokens=max_tokens,
+                    cache_dir=cache_dir,
+                )
+            else:
+                train_tokens = _wikitext_tokens(
+                    variant, "train", max_tokens, cache_dir
+                )
+                validation_tokens = _wikitext_tokens(
+                    variant, "validation", max_tokens, cache_dir
+                )
         else:
             raise ValueError(f"unsupported language dataset: {name}")
         return (
@@ -203,5 +294,6 @@ class CausalLanguageModelingTask(TrainingTask):
         self, model: nn.Module, batch: Any, spec: ExperimentSpec
     ) -> torch.Tensor:
         inputs, targets = batch
-        logits = model(inputs)
+        output = model(inputs)
+        logits = output.logits if hasattr(output, "logits") else output
         return F.cross_entropy(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))

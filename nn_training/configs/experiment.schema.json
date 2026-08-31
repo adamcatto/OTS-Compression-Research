@@ -138,7 +138,14 @@
             "$ref": "schema/tasks.schema.json#/$defs/wikiTextDataset"
           },
           "model": {
-            "$ref": "schema/tasks.schema.json#/$defs/causalTransformer"
+            "oneOf": [
+              {
+                "$ref": "schema/tasks.schema.json#/$defs/causalTransformer"
+              },
+              {
+                "$ref": "schema/tasks.schema.json#/$defs/huggingFaceCausalLM"
+              }
+            ]
           }
         }
       }

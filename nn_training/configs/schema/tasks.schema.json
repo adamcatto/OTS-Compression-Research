@@ -199,6 +199,37 @@
         }
       }
     },
+    "huggingFaceCausalLM": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture", "pretrained_model", "sequence_length"],
+      "properties": {
+        "architecture": {
+          "const": "huggingface_causal_lm"
+        },
+        "pretrained_model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hugging Face repository ID or local PyTorch-compatible checkpoint path."
+        },
+        "tokenizer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trust_remote_code": {
+          "type": "boolean",
+          "default": false
+        },
+        "sequence_length": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "smallConformer": {
       "type": "object",
       "additionalProperties": false,

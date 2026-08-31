@@ -80,6 +80,7 @@ Keep each run near 1–10M parameters and 1,000 optimizer steps:
 | Vision | Cityscapes segmentation | small U-Net | 1.93M |
 | NLP | WikiText-2 language modeling | causal Transformer | 4.87M |
 | Audio | Speech Commands classification | small Conformer | 2.03M |
+| NLP | WikiText-2 fine-tuning | TinyStories-1M | ~1M |
 
 Tasks implement the shared `TrainingTask` interface; configuration and gradient
 recording remain independent of domain.
@@ -89,6 +90,11 @@ through `torchaudio`; WikiText is loaded through Hugging Face `datasets` because
 modern TorchText distributions are not assumed. Cityscapes must be obtained
 separately under `OTS_DATASETS_DIR` according to its dataset terms. The other
 recipes request their dataset download on first use.
+
+The TinyStories recipe is a real pretrained causal LM loaded through the
+optional `transformers` training dependency. Set model architecture to
+`huggingface_causal_lm`, provide `pretrained_model`, and optionally override
+the matching `tokenizer` or pin `revision`.
 
 Run any checked-in recipe with:
 

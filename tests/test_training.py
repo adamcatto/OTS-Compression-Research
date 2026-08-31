@@ -1,6 +1,8 @@
 import json
+import sys
 from pathlib import Path
 from typing import Any, Optional, Tuple
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -15,6 +17,7 @@ from ots_compression.nn_training.api import TaskDomain, TrainingTask
 from ots_compression.nn_training.config import load_experiment_spec
 from ots_compression.nn_training.runner import _resolve_device, run_training
 from ots_compression.nn_training.tasks import default_task_registry
+from ots_compression.nn_training.tasks.nlp import CausalLanguageModelingTask
 
 
 def _checked_in_recipes() -> list[Path]:
@@ -70,9 +73,12 @@ def test_all_checked_in_training_recipes_build_one_to_ten_million_parameters() -
     registry = default_task_registry()
     recipes = _checked_in_recipes()
 
-    assert len(recipes) == 5
+    assert len(recipes) == 6
     for recipe in recipes:
         spec = load_experiment_spec(recipe)
+        if spec.model["architecture"] == "huggingface_causal_lm":
+            assert spec.model["pretrained_model"] == "roneneldan/TinyStories-1M"
+            continue
         model = registry.get(spec.task).build_model(spec)
         parameters = sum(parameter.numel() for parameter in model.parameters())
         assert 1_000_000 <= parameters <= 10_000_000, recipe
@@ -82,6 +88,8 @@ def test_every_recipe_architecture_completes_forward_and_backward() -> None:
     registry = default_task_registry()
     for recipe in _checked_in_recipes():
         spec = load_experiment_spec(recipe)
+        if spec.model["architecture"] == "huggingface_causal_lm":
+            continue
         task = registry.get(spec.task)
         model = task.build_model(spec)
         if spec.task == "vision.classification":
@@ -198,3 +206,40 @@ def test_meta_config_rejects_optimizer_options_from_the_wrong_variant(
             invalid_recipe,
             meta_config_path=Path("nn_training/configs/experiment.schema.json"),
         )
+
+
+def test_pretrained_causal_lm_config_and_model_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    class FakeAutoModel:
+        @staticmethod
+        def from_pretrained(name: str, **kwargs: Any) -> nn.Module:
+            calls.append((name, kwargs))
+            return nn.Linear(2, 2)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(AutoModelForCausalLM=FakeAutoModel, AutoTokenizer=object),
+    )
+    spec = ExperimentSpec(
+        domain="nlp",
+        task="nlp.causal_lm",
+        dataset={"name": "wikitext", "variant": "wikitext-2-raw-v1"},
+        model={
+            "architecture": "huggingface_causal_lm",
+            "pretrained_model": "EleutherAI/pythia-14m",
+            "sequence_length": 128,
+            "revision": "main",
+        },
+        optimizer={"name": "adamw", "lr": 0.001},
+        training={"steps": 1, "batch_size": 1},
+        seed=0,
+    )
+
+    model = CausalLanguageModelingTask().build_model(spec)
+
+    assert isinstance(model, nn.Linear)
+    assert calls == [("EleutherAI/pythia-14m", {"revision": "main"})]

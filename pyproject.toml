@@ -24,6 +24,7 @@ training = [
     "datasets>=2.0",
     "torchaudio>=2.0",
     "torchvision>=0.15",
+    "transformers>=4.37",
 ]
 test = ["pytest>=7"]
 
