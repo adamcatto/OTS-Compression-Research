@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "positiveNumber": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "nonnegativeNumber": {
+      "type": "number",
+      "minimum": 0
+    },
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "exclusiveMaximum": 1
+    },
+    "betaPair": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/probability"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

@@ -1,6 +1,8 @@
+import json
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
+import pytest
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -13,6 +15,14 @@ from ots_compression.nn_training.api import TaskDomain, TrainingTask
 from ots_compression.nn_training.config import load_experiment_spec
 from ots_compression.nn_training.runner import run_training
 from ots_compression.nn_training.tasks import default_task_registry
+
+
+def _checked_in_recipes() -> list[Path]:
+    return sorted(
+        path
+        for path in Path("nn_training/configs").rglob("*.json")
+        if not path.name.endswith(".schema.json")
+    )
 
 
 class _RunnerFixtureTask(TrainingTask):
@@ -42,7 +52,7 @@ class _RunnerFixtureTask(TrainingTask):
 
 def test_all_checked_in_training_recipes_build_one_to_ten_million_parameters() -> None:
     registry = default_task_registry()
-    recipes = sorted(Path("nn_training/configs").rglob("*.json"))
+    recipes = _checked_in_recipes()
 
     assert len(recipes) == 5
     for recipe in recipes:
@@ -54,7 +64,7 @@ def test_all_checked_in_training_recipes_build_one_to_ten_million_parameters() -
 
 def test_every_recipe_architecture_completes_forward_and_backward() -> None:
     registry = default_task_registry()
-    for recipe in sorted(Path("nn_training/configs").rglob("*.json")):
+    for recipe in _checked_in_recipes():
         spec = load_experiment_spec(recipe)
         task = registry.get(spec.task)
         model = task.build_model(spec)

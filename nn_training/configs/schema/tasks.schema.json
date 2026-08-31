@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "cifar10Dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "const": "cifar10"
+        },
+        "root": {
+          "$ref": "common.schema.json#/$defs/path"
+        },
+        "download": {
+          "type": "boolean"
+        }
+      }
+    },
+    "cityscapesDataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "const": "cityscapes"
+        },
+        "root": {
+          "$ref": "common.schema.json#/$defs/path"
+        }
+      }
+    },
+    "wikiTextDataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "variant"],
+      "properties": {
+        "name": {
+          "const": "wikitext"
+        },
+        "variant": {
+          "enum": [
+            "wikitext-2-raw-v1",
+            "wikitext-2-v1",
+            "wikitext-103-raw-v1",
+            "wikitext-103-v1"
+          ]
+        },
+        "root": {
+          "$ref": "common.schema.json#/$defs/path"
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 2
+        }
+      }
+    },
+    "speechCommandsDataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "const": "speech_commands"
+        },
+        "root": {
+          "$ref": "common.schema.json#/$defs/path"
+        },
+        "download": {
+          "type": "boolean"
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "smallConvNet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture"],
+      "properties": {
+        "architecture": {
+          "const": "small_convnet"
+        },
+        "num_classes": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "tinyVisionTransformer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture"],
+      "properties": {
+        "architecture": {
+          "const": "tiny_vit"
+        },
+        "image_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "patch_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "num_classes": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "dimension": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "heads": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "mlp_ratio": {
+          "$ref": "common.schema.json#/$defs/positiveNumber"
+        },
+        "dropout": {
+          "$ref": "common.schema.json#/$defs/probability"
+        }
+      }
+    },
+    "smallUNet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture"],
+      "properties": {
+        "architecture": {
+          "const": "small_unet"
+        },
+        "num_classes": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "base_channels": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "image_height": {
+          "type": "integer",
+          "minimum": 8
+        },
+        "image_width": {
+          "type": "integer",
+          "minimum": 8
+        }
+      }
+    },
+    "causalTransformer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture"],
+      "properties": {
+        "architecture": {
+          "const": "causal_transformer"
+        },
+        "vocab_size": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "sequence_length": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "dimension": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "heads": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "feedforward_dimension": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "dropout": {
+          "$ref": "common.schema.json#/$defs/probability"
+        },
+        "tie_embeddings": {
+          "type": "boolean"
+        }
+      }
+    },
+    "smallConformer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture"],
+      "properties": {
+        "architecture": {
+          "const": "small_conformer"
+        },
+        "num_classes": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "sample_rate": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "n_fft": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "hop_length": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "dimension": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "heads": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "feedforward_dimension": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "convolution_kernel": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "dropout": {
+          "$ref": "common.schema.json#/$defs/probability"
+        }
+      }
+    }
+  }
+}

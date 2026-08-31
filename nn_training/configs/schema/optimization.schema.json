@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "optimizer": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/adamOptimizer"
+        },
+        {
+          "$ref": "#/$defs/adamWOptimizer"
+        },
+        {
+          "$ref": "#/$defs/sgdOptimizer"
+        },
+        {
+          "$ref": "#/$defs/rmspropOptimizer"
+        }
+      ]
+    },
+    "adamOptimizer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "lr"],
+      "properties": {
+        "name": {
+          "const": "adam"
+        },
+        "lr": {
+          "$ref": "common.schema.json#/$defs/positiveNumber"
+        },
+        "betas": {
+          "$ref": "common.schema.json#/$defs/betaPair"
+        },
+        "eps": {
+          "$ref": "common.schema.json#/$defs/positiveNumber"
+        },
+        "weight_decay": {
+          "$ref": "common.schema.json#/$defs/nonnegativeNumber"
+        },
+        "amsgrad": {
+          "type": "boolean"
+        },
+        "maximize": {
+          "type": "boolean"
+        }
+      }
+    },
+    "adamWOptimizer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "lr"],
+      "properties": {
+        "name": {
+          "const": "adamw"
+        },
+        "lr": {
+          "$ref": "common.schema.json#/$defs/positiveNumber"
+        },
+        "betas": {
+          "$ref": "common.schema.json#/$defs/betaPair"
+        },
+        "eps": {
+          "$ref": "common.schema.json#/$defs/positiveNumber"
+        },
+        "weight_decay": {
+          "$ref": "common.schema.json#/$defs/nonnegativeNumber"
+        },
+        "amsgrad": {
+          "type": "boolean"
+        },
+        "maximize": {
+          "type": "boolean"
+        }
+      }
+    },
+    "sgdOptimizer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "lr"],
+      "properties": {
+        "name": {
+          "const": "sgd"
+        },
+        "lr": {
+          "$ref": "common.schema.json#/$defs/positiveNumber"
+        },
+        "momentum": {
+          "$ref": "common.schema.json#/$defs/probability"
+        },
+        "dampening": {
+          "$ref": "common.schema.json#/$defs/probability"
+        },
+        "weight_decay": {
+          "$ref": "common.schema.json#/$defs/nonnegativeNumber"
+        },
+        "nesterov": {
+          "type": "boolean"
+        },
+        "maximize": {
+          "type": "boolean"
+        }
+      }
+    },
+    "rmspropOptimizer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "lr"],
+      "properties": {
+        "name": {
+          "const": "rmsprop"
+        },
+        "lr": {
+          "$ref": "common.schema.json#/$defs/positiveNumber"
+        },
+        "alpha": {
+          "$ref": "common.schema.json#/$defs/probability"
+        },
+        "eps": {
+          "$ref": "common.schema.json#/$defs/positiveNumber"
+        },
+        "weight_decay": {
+          "$ref": "common.schema.json#/$defs/nonnegativeNumber"
+        },
+        "momentum": {
+          "$ref": "common.schema.json#/$defs/probability"
+        },
+        "centered": {
+          "type": "boolean"
+        },
+        "maximize": {
+          "type": "boolean"
+        }
+      }
+    },
+    "plannedMuonClipOptimizer": {
+      "description": "Planned MuonClip contract. It is excluded from the runnable optimizer union until model-aware QK clipping is implemented.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "unified_lr", "muon", "adamw", "qk_clip"],
+      "properties": {
+        "name": {
+          "const": "muon_clip"
+        },
+        "unified_lr": {
+          "type": "boolean"
+        },
+        "lr": {
+          "$ref": "common.schema.json#/$defs/positiveNumber"
+        },
+        "muon": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "lr": {
+              "$ref": "common.schema.json#/$defs/positiveNumber"
+            },
+            "momentum": {
+              "$ref": "common.schema.json#/$defs/probability"
+            },
+            "weight_decay": {
+              "$ref": "common.schema.json#/$defs/nonnegativeNumber"
+            },
+            "nesterov": {
+              "type": "boolean"
+            },
+            "ns_steps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 99
+            },
+            "adjust_lr_fn": {
+              "enum": ["original", "match_rms_adamw", "spectral_unclamped"]
+            }
+          }
+        },
+        "adamw": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "lr": {
+              "$ref": "common.schema.json#/$defs/positiveNumber"
+            },
+            "betas": {
+              "$ref": "common.schema.json#/$defs/betaPair"
+            },
+            "eps": {
+              "$ref": "common.schema.json#/$defs/positiveNumber"
+            },
+            "weight_decay": {
+              "$ref": "common.schema.json#/$defs/nonnegativeNumber"
+            }
+          }
+        },
+        "qk_clip": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "threshold"],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "threshold": {
+              "$ref": "common.schema.json#/$defs/positiveNumber"
+            },
+            "alpha": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}
