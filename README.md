@@ -22,7 +22,7 @@ src/ots_compression/
     evaluation.py         # correctness and performance experiments
   implementation_search/  # future agentic search
 
-nn_training/configs/      # checked-in training experiment recipes
+nn_training/configs/      # recipes plus the experiment meta-config/schema
 baselines/                # baseline experiment notes/configuration
 iter_impl_search_code/    # implementation-search notes/configuration
 ```

@@ -47,8 +47,27 @@ length-delimited record containing ordered tensor names, presence, dtype, shape,
 and contiguous PyTorch bytes. It supports missing or changing tensors without
 silently changing the format. It is deliberately uncompressed.
 
-The shared runner records immediately after backward/unscaling/clipping and
-before the optimizer mutates or clears gradients.
+By default, the shared runner records at `optimizer_input`: after AMP unscaling
+and configured gradient clipping, immediately before the optimizer mutates or
+clears gradients. These are the exact `.grad` tensors passed to
+`optimizer.step()`. Set `training.gradient_capture` to `backward_output` to use
+the earlier hook immediately after backward; with fp16 AMP, that earlier trace
+still contains loss-scaled gradients.
+
+## Configuration contract
+
+[`configs/experiment.schema.json`](configs/experiment.schema.json) is the
+meta-config for concrete recipes. Its referenced task, optimization, and run
+schemas list every accepted categorical value, numeric bound, and
+variant-specific sub-config. Checked-in recipes discover and validate against
+it automatically; use `ots-train --meta-config PATH` for a recipe stored
+elsewhere.
+
+Optimizer branches are deliberately separate, so AdamW cannot silently accept
+an SGD-only option such as `momentum`. Adam, AdamW, SGD, and RMSprop are runnable.
+The catalog also sketches the planned nested MuonClip contract (Muon, fallback
+AdamW, and QK-clip settings), but excludes it from runnable values until its
+model-aware QK-clipping hooks are implemented.
 
 ## Implemented task matrix
 
@@ -79,6 +98,4 @@ ots-train --config nn_training/configs/nlp/wikitext2_causal_transformer.json
 
 The shared loop supports SGD/Adam/AdamW/RMSprop, constant/cosine/warmup-cosine
 schedules, gradient accumulation, clipping, fp32/fp16/bf16 autocast, and CPU,
-CUDA, or MPS. For fp16, gradients are unscaled before recording. If clipping is
-configured, the saved values are the clipped gradients actually consumed by the
-optimizer.
+CUDA, or MPS.
