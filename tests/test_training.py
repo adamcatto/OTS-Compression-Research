@@ -122,5 +122,63 @@ def test_runner_records_every_optimizer_step(tmp_path: Path) -> None:
     assert result.completed_steps == 3
     assert [record.step for record in steps] == [0, 1, 2]
     assert set(steps[0].gradients) == {"weight", "bias"}
+    assert GradientTraceReader(result.experiment.gradients_path).metadata[
+        "gradient_capture"
+    ] == "optimizer_input"
     assert (result.experiment.path / "training_metrics.jsonl").is_file()
     assert (result.experiment.path / "training_summary.json").is_file()
+
+
+def test_capture_hook_can_record_before_or_after_gradient_clipping(
+    tmp_path: Path,
+) -> None:
+    norms = {}
+    for capture_stage in ("backward_output", "optimizer_input"):
+        spec = ExperimentSpec(
+            domain="test",
+            task="test.regression",
+            dataset={"name": "unit-test-fixture"},
+            model={"architecture": "linear"},
+            optimizer={"name": "sgd", "lr": 0.01},
+            training={
+                "steps": 1,
+                "batch_size": 2,
+                "device": "cpu",
+                "precision": "fp32",
+                "gradient_clip_norm": 0.01,
+                "gradient_capture": capture_stage,
+            },
+            seed=11,
+        )
+        settings = Settings(
+            experiments_dir=tmp_path / capture_stage,
+            datasets_dir=tmp_path / "datasets",
+        )
+        result = run_training(spec, _RunnerFixtureTask(), settings=settings)
+        gradients = next(
+            GradientTraceReader(result.experiment.gradients_path).steps()
+        ).gradients.values()
+        norms[capture_stage] = sum(
+            float(gradient.float().square().sum())
+            for gradient in gradients
+            if gradient is not None
+        ) ** 0.5
+
+    assert norms["backward_output"] > 0.01
+    assert norms["optimizer_input"] == pytest.approx(0.01, rel=1e-4)
+
+
+def test_meta_config_rejects_optimizer_options_from_the_wrong_variant(
+    tmp_path: Path,
+) -> None:
+    recipe = Path("nn_training/configs/vision/cifar10_tiny_vit.json")
+    value = json.loads(recipe.read_text(encoding="utf-8"))
+    value["optimizer"]["momentum"] = 0.9
+    invalid_recipe = tmp_path / "invalid.json"
+    invalid_recipe.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="optimizer"):
+        load_experiment_spec(
+            invalid_recipe,
+            meta_config_path=Path("nn_training/configs/experiment.schema.json"),
+        )

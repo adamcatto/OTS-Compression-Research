@@ -1,10 +1,17 @@
 """Shared training runner and domain task implementations."""
 
-from .api import GradientRecorder, TaskDomain, TaskRegistry, TrainingTask
+from .api import (
+    GradientCaptureStage,
+    GradientRecorder,
+    TaskDomain,
+    TaskRegistry,
+    TrainingTask,
+)
 from .config import load_experiment_spec
 from .runner import TrainingResult, run_training
 
 __all__ = [
+    "GradientCaptureStage",
     "GradientRecorder",
     "TaskDomain",
     "TaskRegistry",

@@ -33,6 +33,7 @@
     "num_workers": 0,
     "precision": "fp32",
     "device": "auto",
+    "gradient_capture": "optimizer_input",
     "gradient_clip_norm": 1.0
   },
   "initialization": {
@@ -42,4 +43,3 @@
   "seed": 4,
   "tags": ["baseline", "nlp", "transformer"]
 }
-

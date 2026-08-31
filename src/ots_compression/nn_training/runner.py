@@ -15,7 +15,7 @@ import torch
 
 from ..core.experiments import Experiment, ExperimentSpec, ExperimentStore
 from ..core.settings import Settings
-from .api import GradientRecorder, TrainingTask
+from .api import GradientCaptureStage, GradientRecorder, TrainingTask
 
 
 @dataclass(frozen=True)
@@ -188,6 +188,17 @@ def run_training(
 
     device = _resolve_device(str(training.get("device", "auto")))
     precision = str(training.get("precision", "fp32")).lower()
+    try:
+        capture_stage = GradientCaptureStage(
+            str(
+                training.get(
+                    "gradient_capture", GradientCaptureStage.OPTIMIZER_INPUT.value
+                )
+            ).lower()
+        )
+    except ValueError as exc:
+        choices = ", ".join(stage.value for stage in GradientCaptureStage)
+        raise ValueError(f"gradient_capture must be one of: {choices}") from exc
     model = task.build_model(spec)
     _apply_initialization(model, spec.initialization)
     model = model.to(device)
@@ -208,6 +219,7 @@ def run_training(
     with GradientRecorder.open(
         experiment.gradients_path,
         experiment_id=experiment.experiment_id,
+        capture_stage=capture_stage,
         durable=bool(training.get("durable_gradients", False)),
     ) as recorder, metrics_path.open("w", encoding="utf-8") as metrics_stream:
         for step in range(total_steps):
@@ -224,13 +236,16 @@ def run_training(
                 accumulated_loss += float(loss.detach()) / accumulation_steps
                 scaler.scale(backward_loss).backward()
 
+            if capture_stage is GradientCaptureStage.BACKWARD_OUTPUT:
+                recorder.record_model(step, model)
             if use_scaler:
                 scaler.unscale_(optimizer)
             if clip_norm is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), float(clip_norm))
 
-            # These are the unscaled/clipped gradients consumed by the optimizer.
-            recorder.record_model(step, model)
+            if capture_stage is GradientCaptureStage.OPTIMIZER_INPUT:
+                # These are the unscaled/clipped gradients consumed by the optimizer.
+                recorder.record_model(step, model)
             scaler.step(optimizer)
             scaler.update()
             if scheduler is not None:
@@ -260,6 +275,7 @@ def run_training(
         "device": result.device,
         "duration_seconds": result.duration_seconds,
         "final_loss": result.final_loss,
+        "gradient_capture": capture_stage.value,
         "parameter_count": result.parameter_count,
     }
     (experiment.path / "training_summary.json").write_text(

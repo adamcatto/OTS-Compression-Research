@@ -21,6 +21,13 @@ class TaskDomain(str, Enum):
     OTHER = "other"
 
 
+class GradientCaptureStage(str, Enum):
+    """Point in the optimizer step represented by a gradient trace."""
+
+    BACKWARD_OUTPUT = "backward_output"
+    OPTIMIZER_INPUT = "optimizer_input"
+
+
 class TrainingTask(ABC):
     """Small task adapter used by a future shared training loop.
 
@@ -75,11 +82,19 @@ class GradientRecorder:
 
     @classmethod
     def open(
-        cls, path: Path, *, experiment_id: str, durable: bool = False
+        cls,
+        path: Path,
+        *,
+        experiment_id: str,
+        capture_stage: GradientCaptureStage,
+        durable: bool = False,
     ) -> "GradientRecorder":
         return cls(
             GradientTraceWriter(
-                path, experiment_id=experiment_id, durable=durable
+                path,
+                experiment_id=experiment_id,
+                durable=durable,
+                metadata={"gradient_capture": capture_stage.value},
             )
         )
 

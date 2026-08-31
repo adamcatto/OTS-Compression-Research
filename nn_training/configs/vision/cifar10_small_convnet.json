@@ -25,7 +25,8 @@
     "batch_size": 128,
     "num_workers": 4,
     "precision": "fp32",
-    "device": "auto"
+    "device": "auto",
+    "gradient_capture": "optimizer_input"
   },
   "initialization": {
     "source": "random"
@@ -34,4 +35,3 @@
   "seed": 1,
   "tags": ["baseline", "vision", "cnn"]
 }
-

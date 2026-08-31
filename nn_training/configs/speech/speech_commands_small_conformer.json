@@ -35,6 +35,7 @@
     "num_workers": 4,
     "precision": "fp32",
     "device": "auto",
+    "gradient_capture": "optimizer_input",
     "gradient_clip_norm": 5.0
   },
   "initialization": {
@@ -44,4 +45,3 @@
   "seed": 5,
   "tags": ["baseline", "speech", "conformer"]
 }
-

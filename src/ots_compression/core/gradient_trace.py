@@ -99,10 +99,20 @@ class GradientTraceWriter:
         *,
         experiment_id: str,
         durable: bool = False,
+        metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.path = Path(path)
         self.experiment_id = experiment_id
         self.durable = durable
+        extra_metadata = dict(metadata or {})
+        reserved = {"experiment_id", "format"}.intersection(extra_metadata)
+        if reserved:
+            raise ValueError(f"reserved trace metadata keys: {sorted(reserved)}")
+        self.metadata = {
+            "experiment_id": experiment_id,
+            "format": "ots-gradient-trace",
+            **extra_metadata,
+        }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._last_step: Optional[int] = None
 
@@ -112,20 +122,21 @@ class GradientTraceWriter:
             self._stream.seek(0, os.SEEK_END)
         else:
             self._stream = self.path.open("w+b")
-            metadata = _json_bytes(
-                {"experiment_id": experiment_id, "format": "ots-gradient-trace"}
+            encoded_metadata = _json_bytes(self.metadata)
+            self._stream.write(
+                _FILE_HEADER.pack(_MAGIC, _VERSION, len(encoded_metadata))
             )
-            self._stream.write(_FILE_HEADER.pack(_MAGIC, _VERSION, len(metadata)))
-            self._stream.write(metadata)
+            self._stream.write(encoded_metadata)
             self._commit()
 
     def _validate_existing(self) -> None:
         self._stream.seek(0)
         metadata, _ = _read_file_header(self._stream)
-        if metadata.get("experiment_id") != self.experiment_id:
-            raise GradientTraceError(
-                "trace experiment_id does not match the requested experiment"
-            )
+        for key, expected in self.metadata.items():
+            if metadata.get(key) != expected:
+                raise GradientTraceError(
+                    f"trace {key} does not match the requested value"
+                )
 
         while True:
             fixed = self._stream.read(_RECORD_HEADER.size)
