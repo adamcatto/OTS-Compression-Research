@@ -1,0 +1,4 @@
+.env
+experiments/
+data/
+*.otsg
