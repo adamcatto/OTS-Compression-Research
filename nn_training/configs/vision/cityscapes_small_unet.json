@@ -1,0 +1,37 @@
+{
+  "domain": "vision",
+  "task": "vision.segmentation",
+  "dataset": {
+    "name": "cityscapes"
+  },
+  "model": {
+    "architecture": "small_unet",
+    "num_classes": 19,
+    "base_channels": 32,
+    "image_height": 256,
+    "image_width": 512
+  },
+  "optimizer": {
+    "name": "adamw",
+    "lr": 0.0003,
+    "weight_decay": 0.01
+  },
+  "scheduler": {
+    "name": "cosine",
+    "min_lr": 0.00001
+  },
+  "training": {
+    "steps": 1000,
+    "batch_size": 4,
+    "num_workers": 4,
+    "precision": "fp32",
+    "device": "auto"
+  },
+  "initialization": {
+    "source": "random"
+  },
+  "environment": {},
+  "seed": 3,
+  "tags": ["baseline", "vision", "segmentation"]
+}
+

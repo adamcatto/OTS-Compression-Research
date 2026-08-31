@@ -1,0 +1,37 @@
+{
+  "domain": "vision",
+  "task": "vision.classification",
+  "dataset": {
+    "name": "cifar10",
+    "download": true
+  },
+  "model": {
+    "architecture": "small_convnet",
+    "num_classes": 10,
+    "width": 64
+  },
+  "optimizer": {
+    "name": "sgd",
+    "lr": 0.05,
+    "momentum": 0.9,
+    "weight_decay": 0.0005
+  },
+  "scheduler": {
+    "name": "cosine",
+    "min_lr": 0.0001
+  },
+  "training": {
+    "steps": 1000,
+    "batch_size": 128,
+    "num_workers": 4,
+    "precision": "fp32",
+    "device": "auto"
+  },
+  "initialization": {
+    "source": "random"
+  },
+  "environment": {},
+  "seed": 1,
+  "tags": ["baseline", "vision", "cnn"]
+}
+
