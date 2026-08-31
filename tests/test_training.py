@@ -13,7 +13,7 @@ from ots_compression.core.gradient_trace import GradientTraceReader
 from ots_compression.core.settings import Settings
 from ots_compression.nn_training.api import TaskDomain, TrainingTask
 from ots_compression.nn_training.config import load_experiment_spec
-from ots_compression.nn_training.runner import run_training
+from ots_compression.nn_training.runner import _resolve_device, run_training
 from ots_compression.nn_training.tasks import default_task_registry
 
 
@@ -48,6 +48,22 @@ class _RunnerFixtureTask(TrainingTask):
         del spec
         inputs, targets = batch
         return F.mse_loss(model(inputs), targets)
+
+
+def test_auto_device_prefers_mps_when_cuda_is_not_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    assert _resolve_device("auto").type == "mps"
+
+
+def test_explicit_mps_requires_an_available_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    with pytest.raises(ValueError, match="MPS was requested"):
+        _resolve_device("mps")
 
 
 def test_all_checked_in_training_recipes_build_one_to_ten_million_parameters() -> None:

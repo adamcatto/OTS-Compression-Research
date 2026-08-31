@@ -38,6 +38,14 @@ def _seed_everything(seed: int, deterministic: bool) -> None:
 
 
 def _resolve_device(requested: str) -> torch.device:
+    requested = requested.lower()
+    if requested == "cuda" and not torch.cuda.is_available():
+        raise ValueError("CUDA was requested but is not available in this PyTorch runtime")
+    if requested == "mps" and not torch.backends.mps.is_available():
+        raise ValueError(
+            "MPS was requested but is not available in this PyTorch runtime; "
+            "install an Apple-Silicon PyTorch build and run on macOS 12.3 or later"
+        )
     if requested != "auto":
         return torch.device(requested)
     if torch.cuda.is_available():
