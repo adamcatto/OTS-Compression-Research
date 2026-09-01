@@ -62,6 +62,18 @@ The hard stream budget is 194,816 bytes.
 | 999 | exact-prior causal only | 194,259 | 0.319085 | 100.287x | 0.934341 | 0.966629 | 7.160 s | 0.210 s |
 | 999 | + paid current-SVD factors | 194,326 | 0.319195 | 100.252x | **0.948499** | 0.973936 | 6.971 s | 0.084 s |
 
+![G1 global gradient energy R2 at steps 100, 500, and 999, with the fidelity and continuation thresholds](fidelity_by_step.png)
+
+*Figure 1. The paid current-SVD frontier clears the 0.99 fidelity gate only at
+step 100. Both tested frontiers remain above the separate 0.90 continuation
+cutoff through step 999.*
+
+![G1 shortfall from the R2 0.99 fidelity gate at steps 100, 500, and 999](fidelity_gate_gap.png)
+
+*Figure 2. Distance from the fixed fidelity gate in percentage points. The
+negative paid-factor value at step 100 denotes a pass; the positive late-step
+values quantify the growing deficit.*
+
 The paid current-factor option makes step 100 feasible, and rank-64 plus
 sparse/bulk candidates improve the causal-only result to within 0.001285 of
 the fidelity gate. That success does not persist. At step 500 the strongest
@@ -124,6 +136,10 @@ python -m iter_impl_search_code.experiments.G1.algorithm \
   --steps 100,500,999 \
   --output iter_impl_search_code/experiments/G1/results.csv \
   --summary iter_impl_search_code/experiments/G1/summary.json
+
+python -m iter_impl_search_code.experiments.G1.plot_results \
+  --results iter_impl_search_code/experiments/G1/results.csv \
+  --output-dir iter_impl_search_code/experiments/G1
 ```
 
 The trace is indexed in place. Only steps 99, 100, 499, 500, 998, and 999 are
