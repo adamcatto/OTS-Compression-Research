@@ -6,7 +6,7 @@ import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 
@@ -28,6 +28,7 @@ class LossyMetrics:
     relative_squared_error: float
     decoded_trace: str
     exact_roundtrip: bool = False
+    codec_stats: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -41,7 +42,7 @@ def benchmark_deltaq(trace_path: Path, compressor: OTSDeltaQCompressor, destinat
     artifact = destination / "compressed.otsdq"
     decoded = destination / "decoded_gradients.otsg"
     started = time.perf_counter()
-    compressor.compress(trace_path, artifact)
+    codec_stats = compressor.compress(trace_path, artifact)
     encode_seconds = time.perf_counter() - started
     return evaluate_deltaq_artifact(
         trace_path,
@@ -49,6 +50,7 @@ def benchmark_deltaq(trace_path: Path, compressor: OTSDeltaQCompressor, destinat
         artifact,
         destination,
         encode_seconds=encode_seconds,
+        codec_stats=codec_stats.to_dict(),
     )
 
 
@@ -59,6 +61,7 @@ def evaluate_deltaq_artifact(
     destination: Path,
     *,
     encode_seconds: float,
+    codec_stats: Optional[dict] = None,
 ) -> LossyMetrics:
     """Decode and score an artifact that was produced during training."""
 
@@ -85,6 +88,7 @@ def evaluate_deltaq_artifact(
         gradient_cosine_similarity=dot / max((energy * decoded_energy) ** 0.5, 1e-30),
         relative_squared_error=error / max(energy, 1e-30),
         decoded_trace=str(decoded),
+        codec_stats=codec_stats,
     )
     (destination / "metrics.json").write_text(json.dumps(metrics.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return metrics
@@ -110,3 +114,14 @@ def _compare_traces(source: Path, decoded: Path) -> tuple[float, float, float, f
     if next(source_steps, None) is not None or next(decoded_steps, None) is not None:
         raise ValueError("decoded trace has a different step count")
     return error, energy, dot, decoded_energy
+
+
+def refresh_codec_stats(metrics_path: Path, codec_stats: dict) -> None:
+    """Attach corrected artifact-inspection statistics without rerunning it."""
+
+    metrics_path = Path(metrics_path)
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    metrics["codec_stats"] = codec_stats
+    metrics_path.write_text(
+        json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )

@@ -16,6 +16,17 @@ def main() -> int:
     parser.add_argument("--block-size", type=int, default=16_384)
     parser.add_argument("--relative-squared-error", type=float, default=1e-4)
     parser.add_argument(
+        "--prediction",
+        choices=["previous_decoded_gradient", "zero"],
+        default="previous_decoded_gradient",
+    )
+    parser.add_argument(
+        "--access-label",
+        choices=["offline", "causal-posthoc"],
+        default="offline",
+        help="Result label for a completed-trace run; does not change causality.",
+    )
+    parser.add_argument(
         "--decode-online",
         action="store_true",
         help="Decode and score the artifact emitted inside the training loop.",
@@ -25,8 +36,16 @@ def main() -> int:
     experiment = Path(args.experiment)
     if not experiment.is_dir():
         experiment = root / (f"experiment_{int(args.experiment):03d}" if args.experiment.isdigit() else args.experiment)
-    compressor = OTSDeltaQCompressor(block_size=args.block_size, relative_squared_error=args.relative_squared_error)
-    mode = "online" if args.decode_online else "offline"
+    compressor = OTSDeltaQCompressor(
+        block_size=args.block_size,
+        relative_squared_error=args.relative_squared_error,
+        prediction=args.prediction,
+    )
+    mode = (
+        "online"
+        if args.decode_online
+        else args.access_label.replace("-", "_")
+    )
     destination = experiment / "lossy" / compressor.name / mode
     if args.decode_online:
         step_metrics = destination / "prediction_metrics.jsonl"

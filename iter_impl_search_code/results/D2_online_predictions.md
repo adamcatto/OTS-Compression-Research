@@ -66,6 +66,10 @@ size or needed for decoding.
 | Mean encoded bits per gradient element | 15.8486 |
 | Int8 / FP16 / FP32 blocks | 39,137 / 306,814 / 1,049 |
 
+Artifact inspection added during D3 showed that these modes cover 137,999,360
+int8, 4,715,213,824 FP16, and 17,186,816 FP32 elements. Block counts alone are
+misleading because tensors end in differently sized partial blocks.
+
 The full trajectory is in `prediction_metrics.jsonl`, and aggregate plot-ready
 statistics are in `online_summary.json`, under
 `<experiments>/experiment_003/lossy/ots_deltaq_v1/online/`.

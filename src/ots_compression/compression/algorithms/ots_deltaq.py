@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import statistics
 import struct
 import time
@@ -39,6 +40,9 @@ class DeltaQStats:
     int8_blocks: int
     float16_blocks: int
     float32_blocks: int
+    int8_elements: int
+    float16_elements: int
+    float32_elements: int
 
     def to_dict(self) -> dict:
         return {
@@ -47,6 +51,9 @@ class DeltaQStats:
             "int8_blocks": self.int8_blocks,
             "float16_blocks": self.float16_blocks,
             "float32_blocks": self.float32_blocks,
+            "int8_elements": self.int8_elements,
+            "float16_elements": self.float16_elements,
+            "float32_elements": self.float32_elements,
         }
 
 
@@ -63,6 +70,7 @@ class OTSDeltaQOnlineWriter:
         prediction_metrics_path: Optional[Path] = None,
         summary_path: Optional[Path] = None,
         durable: bool = False,
+        access_mode: str = "online",
     ) -> None:
         self.compressor = compressor
         self.artifact_path = Path(artifact_path)
@@ -81,8 +89,12 @@ class OTSDeltaQOnlineWriter:
             "int8_blocks": 0,
             "float16_blocks": 0,
             "float32_blocks": 0,
+            "int8_elements": 0,
+            "float16_elements": 0,
+            "float32_elements": 0,
         }
         self._summary_path = Path(summary_path) if summary_path else None
+        self._access_mode = access_mode
         self._prediction_metrics_path = (
             Path(prediction_metrics_path) if prediction_metrics_path else None
         )
@@ -108,7 +120,7 @@ class OTSDeltaQOnlineWriter:
         header = {
             "format": "ots-deltaq",
             "version": _VERSION,
-            "access_mode": "online",
+            "access_mode": access_mode,
             "source_metadata": dict(source_metadata),
             "configuration": compressor.configuration(),
         }
@@ -151,7 +163,14 @@ class OTSDeltaQOnlineWriter:
                 encoded_bytes=len(fixed) + len(metadata) + len(payload),
                 block_counts={
                     key: self._counters[key] - before[key]
-                    for key in ("int8_blocks", "float16_blocks", "float32_blocks")
+                    for key in (
+                        "int8_blocks",
+                        "float16_blocks",
+                        "float32_blocks",
+                        "int8_elements",
+                        "float16_elements",
+                        "float32_elements",
+                    )
                 },
                 encode_seconds=codec_seconds,
             )
@@ -172,9 +191,9 @@ class OTSDeltaQOnlineWriter:
                 predictions[name] = None
                 continue
             value = tensor.detach().to(dtype=torch.float32, device="cpu").contiguous()
-            prediction = self._predictors.get(name)
-            if prediction is None or prediction.shape != value.shape:
-                prediction = torch.zeros_like(value)
+            prediction = self.compressor._prediction_for(
+                name, value, self._predictors
+            )
             predictions[name] = prediction
         return predictions
 
@@ -197,7 +216,7 @@ class OTSDeltaQOnlineWriter:
             self.temporary_path.replace(self.artifact_path)
             if self._summary_path is not None:
                 summary = {
-                    "access_mode": "online",
+                    "access_mode": self._access_mode,
                     "algorithm": self.compressor.name,
                     "artifact": str(self.artifact_path),
                     "compressed_bytes": self.artifact_path.stat().st_size,
@@ -231,21 +250,36 @@ class OTSDeltaQCompressor:
     the same uncentered relative squared-error bound (up to floating arithmetic).
     """
 
-    name = "ots_deltaq_v1"
-
-    def __init__(self, *, block_size: int = 16_384, relative_squared_error: float = 1e-4):
+    def __init__(
+        self,
+        *,
+        block_size: int = 16_384,
+        relative_squared_error: float = 1e-4,
+        prediction: str = "previous_decoded_gradient",
+    ):
         if block_size <= 0:
             raise ValueError("block_size must be positive")
         if not 0 < relative_squared_error < 1:
             raise ValueError("relative_squared_error must be in (0, 1)")
+        if prediction not in {"previous_decoded_gradient", "zero"}:
+            raise ValueError(
+                "prediction must be 'previous_decoded_gradient' or 'zero'"
+            )
         self.block_size = block_size
         self.relative_squared_error = relative_squared_error
+        self.prediction = prediction
+
+    @property
+    def name(self) -> str:
+        if self.prediction == "zero":
+            return "ots_deltaq_zero_v1"
+        return "ots_deltaq_v1"
 
     def configuration(self) -> dict:
         return {
             "block_size": self.block_size,
             "relative_squared_error": self.relative_squared_error,
-            "prediction": "previous_decoded_gradient",
+            "prediction": self.prediction,
             "int8_rounding": "nearest",
             "fallbacks": ["float16", "float32"],
         }
@@ -259,6 +293,7 @@ class OTSDeltaQCompressor:
         prediction_metrics_path: Optional[Path] = None,
         summary_path: Optional[Path] = None,
         durable: bool = False,
+        access_mode: str = "online",
     ) -> OTSDeltaQOnlineWriter:
         return OTSDeltaQOnlineWriter(
             self,
@@ -268,6 +303,7 @@ class OTSDeltaQCompressor:
             prediction_metrics_path=prediction_metrics_path,
             summary_path=summary_path,
             durable=durable,
+            access_mode=access_mode,
         )
 
     def compress(self, trace_path: Path, artifact_path: Path) -> DeltaQStats:
@@ -276,6 +312,7 @@ class OTSDeltaQCompressor:
         with self.open_online(
             artifact_path,
             source_metadata=reader.metadata,
+            access_mode="causal_posthoc",
         ) as writer:
             for record in reader.steps():
                 writer.append(record.step, record.gradients)
@@ -305,6 +342,65 @@ class OTSDeltaQCompressor:
                     predictors.update(decoded)
                     previous = step
 
+    def inspect_artifact(self, artifact_path: Path) -> DeltaQStats:
+        """Count encoded modes by block and element without decoding values."""
+
+        counters = {
+            "steps": 0,
+            "tensors": 0,
+            "int8_blocks": 0,
+            "float16_blocks": 0,
+            "float32_blocks": 0,
+            "int8_elements": 0,
+            "float16_elements": 0,
+            "float32_elements": 0,
+        }
+        with Path(artifact_path).open("rb") as stream:
+            header = _read_header(stream)
+            configuration = header.get("configuration", {})
+            if int(configuration.get("block_size", -1)) != self.block_size:
+                raise ValueError("artifact block size does not match compressor")
+            while True:
+                fixed = stream.read(_RECORD_HEADER.size)
+                if not fixed:
+                    return DeltaQStats(**counters)
+                if len(fixed) != _RECORD_HEADER.size:
+                    raise ValueError("truncated OTS-DeltaQ record header")
+                magic, _, metadata_size, payload_size = _RECORD_HEADER.unpack(fixed)
+                if magic != _RECORD_MAGIC:
+                    raise ValueError("invalid OTS-DeltaQ record")
+                metadata = json.loads(
+                    _read_exact(stream, metadata_size, "record metadata")
+                )
+                payload = _read_exact(stream, payload_size, "record payload")
+                counters["steps"] += 1
+                for descriptor in metadata["tensors"]:
+                    if not descriptor.get("present", False):
+                        continue
+                    counters["tensors"] += 1
+                    elements = math.prod(descriptor["shape"])
+                    cursor = int(descriptor["offset"])
+                    end = cursor + int(descriptor["nbytes"])
+                    remaining = elements
+                    while remaining:
+                        count = min(self.block_size, remaining)
+                        mode, _ = _BLOCK_HEADER.unpack_from(payload, cursor)
+                        cursor += _BLOCK_HEADER.size
+                        width = {_INT8: 1, _FLOAT16: 2, _FLOAT32: 4}.get(mode)
+                        if width is None:
+                            raise ValueError("unknown OTS-DeltaQ block mode")
+                        label = {
+                            _INT8: "int8",
+                            _FLOAT16: "float16",
+                            _FLOAT32: "float32",
+                        }[mode]
+                        counters[f"{label}_blocks"] += 1
+                        counters[f"{label}_elements"] += count
+                        cursor += count * width
+                        remaining -= count
+                    if cursor != end:
+                        raise ValueError("invalid OTS-DeltaQ tensor extent")
+
     def _encode_step(self, record: GradientStep, predictors: Mapping[str, torch.Tensor], counters: dict) -> Tuple[bytes, bytes, Dict[str, torch.Tensor]]:
         descriptors, payload_parts, decoded = [], [], {}
         offset = 0
@@ -313,9 +409,7 @@ class OTSDeltaQCompressor:
                 descriptors.append({"name": name, "present": False})
                 continue
             value = tensor.detach().to(dtype=torch.float32, device="cpu").contiguous()
-            prediction = predictors.get(name)
-            if prediction is None or prediction.shape != value.shape:
-                prediction = torch.zeros_like(value)
+            prediction = self._prediction_for(name, value, predictors)
             encoded, reconstruction, block_counts = self._encode_tensor(value, prediction)
             counters["tensors"] += 1
             for key, amount in block_counts.items():
@@ -335,9 +429,9 @@ class OTSDeltaQCompressor:
                 gradients[name] = None
                 continue
             shape = tuple(descriptor["shape"])  # type: ignore[index]
-            prediction = predictors.get(name)
-            if prediction is None or tuple(prediction.shape) != shape:
-                prediction = torch.zeros(shape, dtype=torch.float32)
+            prediction = self._prediction_for(
+                name, torch.zeros(shape, dtype=torch.float32), predictors
+            )
             offset, nbytes = int(descriptor["offset"]), int(descriptor["nbytes"])
             reconstructed = self._decode_tensor(payload[offset : offset + nbytes], prediction)
             dtype = getattr(torch, str(descriptor["dtype"]))
@@ -345,11 +439,31 @@ class OTSDeltaQCompressor:
             decoded[name] = reconstructed.reshape(shape)
         return gradients, decoded
 
+    def _prediction_for(
+        self,
+        name: str,
+        value: torch.Tensor,
+        predictors: Mapping[str, torch.Tensor],
+    ) -> torch.Tensor:
+        if self.prediction == "zero":
+            return torch.zeros_like(value, dtype=torch.float32, device="cpu")
+        prediction = predictors.get(name)
+        if prediction is None or prediction.shape != value.shape:
+            return torch.zeros_like(value, dtype=torch.float32, device="cpu")
+        return prediction
+
     def _encode_tensor(self, value: torch.Tensor, prediction: torch.Tensor) -> Tuple[bytes, torch.Tensor, dict]:
         source, previous = value.reshape(-1), prediction.reshape(-1)
         output = io.BytesIO()
         reconstruction = torch.empty_like(source)
-        counts = {"int8_blocks": 0, "float16_blocks": 0, "float32_blocks": 0}
+        counts = {
+            "int8_blocks": 0,
+            "float16_blocks": 0,
+            "float32_blocks": 0,
+            "int8_elements": 0,
+            "float16_elements": 0,
+            "float32_elements": 0,
+        }
         for offset in range(0, source.numel(), self.block_size):
             current = source[offset : offset + self.block_size]
             predicted = previous[offset : offset + self.block_size]
@@ -358,7 +472,9 @@ class OTSDeltaQCompressor:
             output.write(_BLOCK_HEADER.pack(mode, scale))
             output.write(encoded)
             reconstruction[offset : offset + current.numel()] = predicted + restored
-            counts[{_INT8: "int8_blocks", _FLOAT16: "float16_blocks", _FLOAT32: "float32_blocks"}[mode]] += 1
+            label = {_INT8: "int8", _FLOAT16: "float16", _FLOAT32: "float32"}[mode]
+            counts[f"{label}_blocks"] += 1
+            counts[f"{label}_elements"] += current.numel()
         return output.getvalue(), reconstruction, counts
 
     def _encode_block(self, value: torch.Tensor, residual: torch.Tensor) -> Tuple[int, float, bytes, torch.Tensor]:
@@ -504,7 +620,11 @@ def summarize_prediction_metrics(path: Path) -> Dict[str, Any]:
                 "int8_blocks",
                 "float16_blocks",
                 "float32_blocks",
+                "int8_elements",
+                "float16_elements",
+                "float32_elements",
             )
+            if all(field in row for row in rows)
         },
     }
 

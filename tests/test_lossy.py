@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import torch
 
 from ots_compression.compression.algorithms.ots_deltaq import OTSDeltaQCompressor
@@ -76,3 +77,24 @@ def test_deltaq_online_writer_saves_decoder_predictions_and_step_metrics(
     assert metrics[0]["prediction_energy_r2"] == 0.0
     assert metrics[1]["reconstruction_energy_r2"] >= 0.9999
     assert summary.is_file()
+
+
+def test_deltaq_zero_predictor_is_decoder_consistent(tmp_path: Path) -> None:
+    source = tmp_path / "source.otsg"
+    with GradientTraceWriter(source, experiment_id="zero-unit") as writer:
+        for step in range(3):
+            writer.append(step, {"weight": torch.randn(20_000)})
+
+    compressor = OTSDeltaQCompressor(prediction="zero")
+    metrics = benchmark_deltaq(source, compressor, tmp_path / compressor.name)
+
+    assert compressor.name == "ots_deltaq_zero_v1"
+    assert compressor.configuration()["prediction"] == "zero"
+    assert metrics.gradient_energy_r2 >= 0.999898
+    assert metrics.codec_stats is not None
+    assert metrics.codec_stats["steps"] == 3
+
+
+def test_deltaq_rejects_unknown_predictor() -> None:
+    with pytest.raises(ValueError, match="prediction"):
+        OTSDeltaQCompressor(prediction="future_gradient")
