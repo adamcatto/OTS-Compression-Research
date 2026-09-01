@@ -5,3 +5,30 @@ algorithm construction, and `results.csv`. New runs store one result row per
 training step. Runs completed before per-step instrumentation was introduced
 retain their aggregate writeup and explicitly mark unavailable step data rather
 than being rerun solely to backfill telemetry.
+
+When a replayed final model exists, the bundle also contains
+`final_model_outputs.csv`. These measurements evaluate the normal and
+lossy-gradient-replayed final models on the same held-out examples. They are
+computed from saved weights, so adding them did not rerun training or codec
+experiments.
+
+## Final-model output comparison
+
+All rows below use the same 32 validation batches (131,072 next-token
+predictions). `H(ref, lossy)` is the cross-entropy from the reference model's
+probability distribution to the lossy replay's distribution; KL and JS remove
+the reference distribution's intrinsic entropy and are therefore more useful
+for comparing algorithms.
+
+| ID | Label CE delta | H(ref, lossy) | KL(ref || lossy) | JS | Top-1 agreement | Logit rel. L2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| D2 | +1.283e-5 | 2.21632965 | 5.125e-7 | 1.281e-7 | 99.9397% | 0.0376% |
+| D3 | +4.299e-6 | 2.21632927 | 1.351e-7 | 3.378e-8 | 99.9710% | 0.0203% |
+| D4 | +2.459e-5 | 2.21632974 | 6.064e-7 | 1.516e-7 | 99.9352% | 0.0403% |
+| D5 | +1.434e-4 | 2.21637976 | 5.062e-5 | 1.076e-5 | 99.7200% | 11.7954% |
+| E1 | -5.186e-6 | 2.21633470 | 5.561e-6 | 1.406e-6 | 99.8466% | 1.2381% |
+| E2 | +7.269e-6 | 2.21633710 | 7.963e-6 | 2.038e-6 | 99.8520% | 1.0389% |
+
+The raw teacher-to-lossy cross-entropy changes little because most of it is the
+teacher's entropy. D3 is the closest output distribution in this comparison;
+D5 is the most divergent, consistent with its more aggressive quantizer.

@@ -16,7 +16,10 @@ writeup names the reason (replication, a corrected bug, or a changed metric).
    live under the external experiment directory, never in git.
 4. Measure compressed size, encode/decode cost, gradient energy-R2, cosine
    similarity, replayed optimizer trajectory, final-weight difference, and
-   fixed-probe loss curve when their required artifacts exist.
+   fixed-probe loss curve when their required artifacts exist. On identical
+   held-out examples, compare the normal and replayed final models using label
+   cross-entropy, teacher-to-lossy cross-entropy, KL in both directions,
+   Jensen-Shannon divergence, output agreement, and logit/probability error.
 5. Store the experiment's writeup, runnable algorithm definition, aggregate
    result, and per-step result table together under `experiments/<ID>/`, then
    add/update the index.
@@ -47,11 +50,13 @@ experiments/<ID>/
   README.md       hypothesis, method, aggregate result, and interpretation
   algorithm.py    exact runnable algorithm construction used for the run
   results.csv     one row per training step
+  final_model_outputs.csv  held-out final-model distribution comparison
 ```
 
 `results.csv` stores at least the step number, uncompressed and compressed
 bytes, compression ratio, online compression latency, and compression
 throughput. Prediction and reconstruction metrics are included when available.
+`final_model_outputs.csv` is required whenever a replayed final model exists.
 Large tensors, compressed artifacts, model weights, and loss curves remain on
 the external experiment drive. A legacy run whose per-step latency was not
 recorded is marked unavailable rather than rerun only to populate the table.

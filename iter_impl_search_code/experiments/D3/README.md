@@ -46,6 +46,13 @@ larger than D2 and therefore rejects the rate hypothesis. Encode/decode took
 The zero predictor improves fidelity because more data remains FP16, not
 because it produces a better rate/fidelity frontier.
 
+## Final-model output agreement
+
+On 131,072 held-out next-token predictions, the replayed model has 99.9710%
+top-1 agreement with the normal final model. Reference-to-lossy KL is
+1.351e-7, label cross-entropy changes by +4.299e-6, and logit relative L2 is
+0.0203%. The complete comparison is in `final_model_outputs.csv`.
+
 ## Mode allocation correction
 
 D3 initially appeared to have more int8 blocks (44,910 versus D2's 39,137),

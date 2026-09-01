@@ -83,6 +83,13 @@ Rank 1 was selected for 12,181 of the 25,000 matrix instances and predicted
 while FP16 use fell from 4.715 billion to 3.969 billion values. It improves the
 compression ratio 8.3% over D2's 2.020x without D5's sparse exceptions.
 
+## Final-model output agreement
+
+On 131,072 held-out next-token predictions, the replayed model has 99.8466%
+top-1 agreement with the normal final model. Reference-to-lossy KL is
+5.561e-6, label cross-entropy changes by -5.186e-6, and logit relative L2 is
+1.2381%. The complete comparison is in `final_model_outputs.csv`.
+
 ## Prediction trace
 
 The decoder-reconstructed `predictions.otsg` contains all 1,000 prediction

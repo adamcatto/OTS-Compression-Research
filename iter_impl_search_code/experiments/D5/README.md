@@ -53,6 +53,13 @@ Of 4.87 billion values, 3.552 billion used the sparse-outlier mode and
 fell back to FP16. This increased compression by about 53% over D2's 2.020x,
 while remaining comfortably above the requested 0.99 gradient-R2 floor.
 
+## Final-model output agreement
+
+On 131,072 held-out next-token predictions, the replayed model has 99.7200%
+top-1 agreement with the normal final model. Reference-to-lossy KL is
+5.062e-5, label cross-entropy changes by +1.434e-4, and logit relative L2 is
+11.7954%. The complete comparison is in `final_model_outputs.csv`.
+
 ## Interpretation
 
 The loss trajectory is close enough for many training-telemetry or approximate

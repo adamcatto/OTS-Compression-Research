@@ -57,6 +57,13 @@ prediction tensor record, and prediction-metrics row. The actual predictions
 occupy a diagnostic `predictions.otsg` trace and are not counted in compressed
 size or needed for decoding.
 
+## Final-model output agreement
+
+On 131,072 held-out next-token predictions, the replayed model has 99.9397%
+top-1 agreement with the normal final model. Reference-to-lossy KL is
+5.125e-7, label cross-entropy changes by +1.283e-5, and logit relative L2 is
+0.0376%. The complete comparison is in `final_model_outputs.csv`.
+
 ## Prediction behavior
 
 | Prediction measurement across steps | Value |

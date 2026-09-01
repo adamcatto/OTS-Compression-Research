@@ -91,6 +91,13 @@ aggregate reconstruction. The external directory retains the compressed and
 decoded traces, predictions, raw JSONL telemetry, replay loss curve, and
 replayed final weights.
 
+## Final-model output agreement
+
+On 131,072 held-out next-token predictions, the replayed model has 99.8520%
+top-1 agreement with the normal final model. Reference-to-lossy KL is
+7.963e-6, label cross-entropy changes by +7.269e-6, and logit relative L2 is
+1.0389%. The complete comparison is in `final_model_outputs.csv`.
+
 ## What we learned
 
 Warm-started subspace tracking validates the rate hypothesis. It increases

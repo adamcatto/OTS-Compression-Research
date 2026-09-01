@@ -52,6 +52,13 @@ decoded gradient for 808,566,528 elements (16.6%). It places 156,379,392
 elements in int8, versus 137,999,360 for D2 and 29,873,408 for D3. Even so,
 4,696,866,560 elements (96.4%) remain FP16.
 
+## Final-model output agreement
+
+On 131,072 held-out next-token predictions, the replayed model has 99.9352%
+top-1 agreement with the normal final model. Reference-to-lossy KL is
+6.064e-7, label cross-entropy changes by +2.459e-5, and logit relative L2 is
+0.0403%. The complete comparison is in `final_model_outputs.csv`.
+
 ## What we learned
 
 The local selector does combine D2 and D3's useful cases and slightly improves
