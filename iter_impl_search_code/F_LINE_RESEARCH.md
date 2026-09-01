@@ -397,10 +397,13 @@ weights evolve continuously.
   82,176 FP16 values in 4.8704B. Final-weight relative L2 was 7.01% and output
   KL was `9.08e-4`, both slightly worse than F1. Rate won; endpoint fidelity
   and the chosen sensitivity-budget calibration were rejected.
-- **F2R:** rate-matched sensitivity allocation. Carry a byte reservoir across
-  steps and adapt the weighted budget to spend approximately F1's byte rate,
-  so endpoint differences test *where* precision is allocated rather than how
-  much total error was added. Keep the raw `1e-4` bound.
+- **F2R (complete; partial success):** rate-matched sensitivity allocation. A
+  carried byte reservoir matched F1's 5,644,610,904-byte block payload exactly.
+  At the same rate it improved gradient R2 from 0.999930143 to 0.999935095,
+  reduced cumulative error L2 by 3.52%, final-weight relative L2 by 1.68%, and
+  output KL by 1.81%. Top-1 agreement was essentially flat/slightly worse and
+  the final-weight error remained 6.84%, so retain the placement signal without
+  treating it as an endpoint solution.
 - **F3:** decoder-synchronized rank-k tensor subspaces with no per-step full
   factors; compare fixed cadence with innovation-triggered refresh and feed its
   core/residual candidates into F2's allocator.
@@ -423,6 +426,14 @@ rate-match F1 before F3; otherwise a comparison would confound sensitivity
 placement with F2's 13.7% byte reduction and 20.3% larger raw error. If F2R
 fails, the block-scalar proxy has earned rejection and the subspace/error-debt
 stages become the next evidence-based move.
+
+F2R completed that falsification. At exactly F1's block payload, optimizer-aware
+placement modestly improved continuous replay and output-distribution metrics,
+so the signal is retained. The limited effect and persistent concentration in
+embedding/early-attention tensors rule out more scalar-budget tuning as the
+main next step. F3 should combine decoder-synchronized tensor subspaces with
+F2R's rate controller; F4 remains the signed-error-debt stage if structured
+representation alone does not control trajectory accumulation.
 
 ## Selected primary references
 
