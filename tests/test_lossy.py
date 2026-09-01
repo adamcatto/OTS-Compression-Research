@@ -242,3 +242,40 @@ def test_e2_warm_start_tracks_temporal_matrix_subspace() -> None:
     assert compressor.name == "ots_rank1_tracking_e2"
     assert compressor.configuration()["rank1_warm_start"] is True
     assert warm_error < fixed_error
+
+
+def test_f1_randomized_hadamard_round_trips_and_flattens_outlier(
+    tmp_path: Path,
+) -> None:
+    block_size = 1_024
+    gradient = torch.full((block_size,), 0.0039)
+    gradient[0] = 1.0
+    compressor = OTSDeltaQCompressor(
+        block_size=block_size,
+        prediction="zero",
+        block_transform="randomized_hadamard",
+    )
+
+    _, reconstruction, _, counts = compressor._encode_tensor(
+        gradient, torch.zeros_like(gradient)
+    )
+
+    assert compressor.name == "ots_rht_deltaq_f1"
+    assert counts["rht_int8_blocks"] == 1
+    assert counts["rht_int8_elements"] == block_size
+    relative_error = float(
+        (gradient - reconstruction).square().sum() / gradient.square().sum()
+    )
+    assert relative_error <= 1e-4
+
+    source = tmp_path / "rht.otsg"
+    with GradientTraceWriter(source, experiment_id="rht-unit") as writer:
+        writer.append(0, {"weight": gradient})
+    metrics = benchmark_deltaq(source, compressor, tmp_path / compressor.name)
+    assert metrics.gradient_energy_r2 >= 0.9999
+    assert metrics.codec_stats["rht_int8_elements"] == block_size
+
+
+def test_f1_rejects_unknown_block_transform() -> None:
+    with pytest.raises(ValueError, match="block_transform"):
+        OTSDeltaQCompressor(block_transform="dense_random_rotation")

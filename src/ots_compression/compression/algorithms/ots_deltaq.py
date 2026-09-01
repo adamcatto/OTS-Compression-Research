@@ -25,7 +25,7 @@ from ...core.gradient_trace import GradientStep, GradientTraceReader, GradientTr
 
 
 _MAGIC = b"OTSDQ001"
-_VERSION = 4
+_VERSION = 5
 _FILE_HEADER = struct.Struct("<8sHI")
 _RECORD_HEADER = struct.Struct("<4sQIQ")
 _RECORD_MAGIC = b"STEP"
@@ -33,6 +33,7 @@ _BLOCK_HEADER = struct.Struct("<Bf")
 _INT8, _FLOAT16, _FLOAT32 = range(3)
 _INT8_OUTLIER = 3
 _OUTLIER_COUNT = struct.Struct("<I")
+_RHT_FLAG = 0x08
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,8 @@ class DeltaQStats:
     rank1_prediction_blocks: int
     rank1_prediction_elements: int
     rank1_factor_bytes: int
+    rht_int8_blocks: int
+    rht_int8_elements: int
 
     def to_dict(self) -> dict:
         return {
@@ -78,6 +81,8 @@ class DeltaQStats:
             "rank1_prediction_blocks": self.rank1_prediction_blocks,
             "rank1_prediction_elements": self.rank1_prediction_elements,
             "rank1_factor_bytes": self.rank1_factor_bytes,
+            "rht_int8_blocks": self.rht_int8_blocks,
+            "rht_int8_elements": self.rht_int8_elements,
         }
 
 
@@ -128,6 +133,8 @@ class OTSDeltaQOnlineWriter:
             "rank1_prediction_blocks": 0,
             "rank1_prediction_elements": 0,
             "rank1_factor_bytes": 0,
+            "rht_int8_blocks": 0,
+            "rht_int8_elements": 0,
         }
         self._summary_path = Path(summary_path) if summary_path else None
         self._access_mode = access_mode
@@ -217,6 +224,8 @@ class OTSDeltaQOnlineWriter:
                         "rank1_prediction_blocks",
                         "rank1_prediction_elements",
                         "rank1_factor_bytes",
+                        "rht_int8_blocks",
+                        "rht_int8_elements",
                     )
                 },
                 encode_seconds=codec_seconds,
@@ -291,6 +300,7 @@ class OTSDeltaQCompressor:
         outlier_fraction: float = 0.0,
         rank1_power_iterations: int = 1,
         rank1_warm_start: bool = False,
+        block_transform: str = "none",
     ):
         if block_size <= 0:
             raise ValueError("block_size must be positive")
@@ -310,15 +320,23 @@ class OTSDeltaQCompressor:
             raise ValueError("outlier_fraction must be in [0, 1)")
         if rank1_power_iterations <= 0:
             raise ValueError("rank1_power_iterations must be positive")
+        if block_transform not in {"none", "randomized_hadamard"}:
+            raise ValueError(
+                "block_transform must be 'none' or 'randomized_hadamard'"
+            )
         self.block_size = block_size
         self.relative_squared_error = relative_squared_error
         self.prediction = prediction
         self.outlier_fraction = outlier_fraction
         self.rank1_power_iterations = rank1_power_iterations
         self.rank1_warm_start = rank1_warm_start
+        self.block_transform = block_transform
+        self._rht_sign_cache: Dict[int, torch.Tensor] = {}
 
     @property
     def name(self) -> str:
+        if self.block_transform == "randomized_hadamard":
+            return "ots_rht_deltaq_f1"
         if self.prediction == "rank1_tensor":
             return (
                 "ots_rank1_tracking_e2"
@@ -345,6 +363,8 @@ class OTSDeltaQCompressor:
             "rank1_power_iterations": self.rank1_power_iterations,
             "rank1_factor_dtype": "float16",
             "rank1_warm_start": self.rank1_warm_start,
+            "block_transform": self.block_transform,
+            "rht_sign_seed": 0x5EED_F101,
         }
 
     def open_online(
@@ -480,6 +500,8 @@ class OTSDeltaQCompressor:
             "rank1_prediction_blocks": 0,
             "rank1_prediction_elements": 0,
             "rank1_factor_bytes": 0,
+            "rht_int8_blocks": 0,
+            "rht_int8_elements": 0,
         }
         with Path(artifact_path).open("rb") as stream:
             header = _read_header(stream)
@@ -544,6 +566,9 @@ class OTSDeltaQCompressor:
                             exception_bytes = 0
                         counters[f"{label}_blocks"] += 1
                         counters[f"{label}_elements"] += count
+                        if mode == _INT8 and code & _RHT_FLAG:
+                            counters["rht_int8_blocks"] += 1
+                            counters["rht_int8_elements"] += count
                         if predictor_label == "rank1":
                             predictor_counter = "rank1_prediction"
                         elif configuration.get("prediction") == "zero":
@@ -696,6 +721,8 @@ class OTSDeltaQCompressor:
             "rank1_prediction_blocks": 0,
             "rank1_prediction_elements": 0,
             "rank1_factor_bytes": 0,
+            "rht_int8_blocks": 0,
+            "rht_int8_elements": 0,
         }
         if predictor_kind is None:
             predictor_kind = "zero" if self.prediction == "zero" else "previous"
@@ -707,17 +734,33 @@ class OTSDeltaQCompressor:
                     self._encode_candidate(current, previous_block, 0),
                     self._encode_candidate(current, torch.zeros_like(current), 1),
                 ]
-                mode, scale, encoded, restored, error, predictor_id, predicted = min(
+                (
+                    mode,
+                    scale,
+                    encoded,
+                    restored,
+                    error,
+                    predictor_id,
+                    predicted,
+                    transformed,
+                ) = min(
                     candidates, key=lambda candidate: (len(candidate[2]), candidate[4])
                 )
             else:
                 predictor_id = 1 if predictor_kind == "zero" else 0
                 predicted = previous_block
-                mode, scale, encoded, restored, error, _, _ = self._encode_candidate(
-                    current, predicted, predictor_id
-                )
+                (
+                    mode,
+                    scale,
+                    encoded,
+                    restored,
+                    error,
+                    _,
+                    _,
+                    transformed,
+                ) = self._encode_candidate(current, predicted, predictor_id)
             del error
-            code = mode | (predictor_id << 2)
+            code = mode | (predictor_id << 2) | (_RHT_FLAG if transformed else 0)
             output.write(_BLOCK_HEADER.pack(code, scale))
             output.write(encoded)
             reconstruction[offset : offset + current.numel()] = predicted + restored
@@ -734,6 +777,9 @@ class OTSDeltaQCompressor:
                 counts["outlier_values"] += _OUTLIER_COUNT.unpack_from(
                     encoded, 0
                 )[0]
+            if transformed:
+                counts["rht_int8_blocks"] += 1
+                counts["rht_int8_elements"] += current.numel()
             predictor_label = (
                 "rank1_prediction"
                 if predictor_kind == "rank1"
@@ -795,9 +841,20 @@ class OTSDeltaQCompressor:
         value: torch.Tensor,
         prediction: torch.Tensor,
         predictor_id: int,
-    ) -> Tuple[int, float, bytes, torch.Tensor, float, int, torch.Tensor]:
+    ) -> Tuple[
+        int,
+        float,
+        bytes,
+        torch.Tensor,
+        float,
+        int,
+        torch.Tensor,
+        bool,
+    ]:
         residual = value - prediction
-        mode, scale, encoded, restored = self._encode_block(value, residual)
+        mode, scale, encoded, restored, transformed = self._encode_block(
+            value, residual
+        )
         error = float(torch.sum((residual - restored).square(), dtype=torch.float64))
         if self.outlier_fraction:
             outlier = self._encode_outlier_block(value, residual)
@@ -814,7 +871,17 @@ class OTSDeltaQCompressor:
                     encoded = outlier_encoded
                     restored = outlier_restored
                     error = outlier_error
-        return mode, scale, encoded, restored, error, predictor_id, prediction
+                    transformed = False
+        return (
+            mode,
+            scale,
+            encoded,
+            restored,
+            error,
+            predictor_id,
+            prediction,
+            transformed,
+        )
 
     def _encode_outlier_block(
         self, value: torch.Tensor, residual: torch.Tensor
@@ -851,19 +918,56 @@ class OTSDeltaQCompressor:
         )
         return _INT8_OUTLIER, scale, encoded, restored
 
-    def _encode_block(self, value: torch.Tensor, residual: torch.Tensor) -> Tuple[int, float, bytes, torch.Tensor]:
+    def _encode_block(
+        self, value: torch.Tensor, residual: torch.Tensor
+    ) -> Tuple[int, float, bytes, torch.Tensor, bool]:
         energy = float(torch.sum(value.square(), dtype=torch.float64))
-        maximum = float(residual.abs().max()) if residual.numel() else 0.0
+        transformed = False
+        quantizer_input = residual
+        if (
+            self.block_transform == "randomized_hadamard"
+            and residual.numel() >= 2
+            and residual.numel() & (residual.numel() - 1) == 0
+        ):
+            quantizer_input = self._randomized_hadamard(residual)
+            transformed = True
+        maximum = (
+            float(quantizer_input.abs().max()) if quantizer_input.numel() else 0.0
+        )
         scale = maximum / 127.0 if maximum else 1.0
-        quantized = torch.round(residual / scale).clamp(-127, 127).to(torch.int8)
+        quantized = (
+            torch.round(quantizer_input / scale).clamp(-127, 127).to(torch.int8)
+        )
         restored = quantized.to(torch.float32) * scale
+        if transformed:
+            restored = self._inverse_randomized_hadamard(restored)
         if _within_budget(value, residual - restored, energy, self.relative_squared_error):
-            return _INT8, scale, quantized.numpy().tobytes(), restored
+            return _INT8, scale, quantized.numpy().tobytes(), restored, transformed
         half = residual.to(torch.float16)
         restored = half.to(torch.float32)
         if _within_budget(value, residual - restored, energy, self.relative_squared_error):
-            return _FLOAT16, 1.0, half.numpy().tobytes(), restored
-        return _FLOAT32, 1.0, residual.numpy().tobytes(), residual
+            return _FLOAT16, 1.0, half.numpy().tobytes(), restored, False
+        return _FLOAT32, 1.0, residual.numpy().tobytes(), residual, False
+
+    def _randomized_hadamard(self, value: torch.Tensor) -> torch.Tensor:
+        signs = self._rht_signs(value.numel())
+        return _fast_walsh_hadamard(value * signs)
+
+    def _inverse_randomized_hadamard(self, value: torch.Tensor) -> torch.Tensor:
+        signs = self._rht_signs(value.numel())
+        return _fast_walsh_hadamard(value) * signs
+
+    def _rht_signs(self, count: int) -> torch.Tensor:
+        signs = self._rht_sign_cache.get(count)
+        if signs is None:
+            generator = torch.Generator(device="cpu")
+            generator.manual_seed(0x5EED_F101 + count)
+            signs = torch.randint(
+                0, 2, (count,), generator=generator, dtype=torch.int8
+            ).to(torch.float32)
+            signs.mul_(2.0).sub_(1.0)
+            self._rht_sign_cache[count] = signs
+        return signs
 
     def _decode_tensor(self, payload: bytes, prediction: torch.Tensor) -> torch.Tensor:
         source = prediction.reshape(-1)
@@ -916,6 +1020,8 @@ class OTSDeltaQCompressor:
                 cursor += byte_count
             if mode == _INT8:
                 residual = torch.frombuffer(bytearray(raw), dtype=torch.int8).to(torch.float32) * scale
+                if code & _RHT_FLAG:
+                    residual = self._inverse_randomized_hadamard(residual)
             elif mode == _FLOAT16:
                 residual = torch.frombuffer(bytearray(raw), dtype=torch.float16).to(torch.float32)
             elif mode == _FLOAT32:
@@ -930,6 +1036,24 @@ class OTSDeltaQCompressor:
         if cursor != len(payload):
             raise ValueError("unexpected bytes after OTS-DeltaQ tensor")
         return output
+
+
+def _fast_walsh_hadamard(value: torch.Tensor) -> torch.Tensor:
+    """Apply a normalized Walsh-Hadamard transform to a power-of-two vector."""
+
+    count = value.numel()
+    if count == 0 or count & (count - 1):
+        raise ValueError("Hadamard input length must be a positive power of two")
+    output = value.detach().to(torch.float32).reshape(-1).clone()
+    width = 1
+    while width < count:
+        paired = output.reshape(-1, 2, width)
+        left = paired[:, 0, :].clone()
+        right = paired[:, 1, :].clone()
+        paired[:, 0, :] = left + right
+        paired[:, 1, :] = left - right
+        width *= 2
+    return output / math.sqrt(count)
 
 
 def _within_budget(value: torch.Tensor, error: torch.Tensor, energy: float, budget: float) -> bool:
@@ -1065,6 +1189,8 @@ def summarize_prediction_metrics(path: Path) -> Dict[str, Any]:
                 "rank1_prediction_blocks",
                 "rank1_prediction_elements",
                 "rank1_factor_bytes",
+                "rht_int8_blocks",
+                "rht_int8_elements",
             )
             if all(field in row for row in rows)
         },
@@ -1095,6 +1221,6 @@ def _read_exact(stream, count: int, context: str) -> bytes:
 
 def _read_header(stream) -> Mapping[str, object]:
     magic, version, size = _FILE_HEADER.unpack(_read_exact(stream, _FILE_HEADER.size, "header"))
-    if magic != _MAGIC or version not in {1, 2, 3, 4}:
+    if magic != _MAGIC or version not in {1, 2, 3, 4, 5}:
         raise ValueError("not a supported OTS-DeltaQ artifact")
     return json.loads(_read_exact(stream, size, "header metadata"))

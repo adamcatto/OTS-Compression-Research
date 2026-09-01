@@ -19,6 +19,11 @@ def main() -> int:
     parser.add_argument("--rank1-power-iterations", type=int, default=1)
     parser.add_argument("--rank1-warm-start", action="store_true")
     parser.add_argument(
+        "--block-transform",
+        choices=["none", "randomized_hadamard"],
+        default="none",
+    )
+    parser.add_argument(
         "--prediction",
         choices=[
             "previous_decoded_gradient",
@@ -51,6 +56,7 @@ def main() -> int:
         outlier_fraction=args.outlier_fraction,
         rank1_power_iterations=args.rank1_power_iterations,
         rank1_warm_start=args.rank1_warm_start,
+        block_transform=args.block_transform,
     )
     mode = (
         "online"
