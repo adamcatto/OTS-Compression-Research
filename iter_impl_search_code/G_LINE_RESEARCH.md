@@ -374,7 +374,7 @@ memory criterion even if archive amortization makes its nominal bpv look low.
 
 ## Smallest decisive sequence
 
-### G1 — late-step causal structural rate frontier (next)
+### G1 — late-step causal structural rate frontier (complete; rejected)
 
 No model replay and no 1,000-step encode yet. On steps 100, 500, and 999:
 
@@ -392,6 +392,19 @@ Stop if the oracle selector cannot reach R2 0.99. Passing a sampled late-step
 frontier only authorizes a short causal prefix; it does not authorize the full
 replay.
 
+G1 implemented this screen with actual decodable streams and a global
+multiple-choice rate allocator. It widened the candidate set through rank 64,
+explicit aligned basis-coordinate innovations, sparse plus entropy-coded bulk
+residuals, and paid current-SVD factors. At step 100, causal-only achieved
+`R2 = 0.988715` at `0.319202` bpv; adding paid current factors passed with
+`R2 = 0.993601` at `0.319281` bpv. At step 500, however, causal-only fell to
+`0.960141`, and even the paid-current-factor frontier reached only `0.970510`
+at `0.319258` bpv. The gate therefore stopped the run before step 999 and did
+not authorize replay. See `experiments/G1/README.md` and `results.csv`.
+The G0 TT and Kronecker measurements remained comparison controls rather than
+being promoted into byte codecs because their energy capture was substantially
+below even the rejected G1 frontier.
+
 ### G1P — procedural side-information control
 
 Measure bytes for batch indices, labels if not dataset-derived, RNG state,
@@ -402,7 +415,9 @@ dataset and performs training compute.
 
 ### G2 — shared factor/residual hyperdecoder (conditional)
 
-Only if G1 identifies compressible factor innovation. Fit a shared sublinear
+Only if G1 identifies compressible factor innovation. G1 did not clear that
+condition at the late-step gate, so this branch is currently not authorized.
+If reopened with new evidence, fit a shared sublinear
 decoder for factor updates or residual distribution parameters. Include all
 initial weights and online updates; forbid dense per-layer output heads.
 
@@ -414,10 +429,11 @@ rate, R2, synchronization, and short-prefix trajectory gates pass.
 
 ## Pivot rule
 
-If G1 cannot reach 0.32 bits/value and R2 0.99 even with optimistic exact prior
-bases, record the incompatibility as a gradient-only result. The main path then
-pivots to procedural training transcripts or explicitly states the side
-information required. It must not relabel 1–3 bits/value as “near 100x,” exclude
+G1 reached the rate but not `R2 = 0.99` at step 500 even with optimistic exact
+prior bases and a paid-current-SVD comparison frontier. This activates the
+pivot: record the incompatibility as a tested gradient-only result and move the
+main path to procedural training transcripts or explicitly state the side
+information required. Do not relabel 1–3 bits/value as “near 100x,” exclude
 small tensors/metadata, or relax the R2 target.
 
 ## Selected primary references
