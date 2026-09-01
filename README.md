@@ -50,4 +50,17 @@ Run a training recipe and then all installed baselines:
 ```sh
 ots-train --config nn_training/configs/vision/cifar10_small_convnet.json
 ots-baselines --experiment experiment_001
+ots-lossy --experiment experiment_001
 ```
+
+Results are separated by fidelity regime: `lossless/<codec>/<mode>/` contains
+exact-codec controls, while `lossy/<codec>/<mode>/` contains approximate
+algorithms, decoded traces, and fidelity measurements.  See
+[`iter_impl_search_code/`](iter_impl_search_code/) for the cumulative algorithm
+index and iteration protocol.
+
+When `training.online_compression` is configured, OTS-DeltaQ appends a complete
+compressed record at every gradient-capture point. Its `online/` directory also
+contains the decoder predictions and per-step prediction metrics used for
+trajectory plots; these diagnostic predictions are not required by the decoder
+and are not counted in the compression ratio.

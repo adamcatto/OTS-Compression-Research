@@ -35,7 +35,15 @@ The root is selected by `OTS_EXPERIMENTS_DIR` in the environment or `.env`:
   experiment_001/
     manifest.json
     gradients.otsg
-    baselines/<algorithm>/<online-or-offline>/metrics.json
+    initial_model.pt
+    final_model.pt
+    replay_contract.json
+    lossless/<algorithm>/<online-or-offline>/metrics.json
+    lossy/ots_deltaq_v1/online/
+      compressed.otsdq
+      predictions.otsg
+      prediction_metrics.jsonl
+      online_summary.json
 ```
 
 `manifest.json` captures the domain, task, dataset, complete model/optimizer/
@@ -46,6 +54,12 @@ stable configuration fingerprint.
 length-delimited record containing ordered tensor names, presence, dtype, shape,
 and contiguous PyTorch bytes. It supports missing or changing tensors without
 silently changing the format. It is deliberately uncompressed.
+
+When `training.online_compression` is configured, the runner also encodes and
+flushes each captured step before the optimizer advances. `predictions.otsg`
+is optional diagnostic data containing the actual decoder-known prediction at
+every step; it is not required to decode and is excluded from compression size.
+The JSONL metrics provide the per-step prediction error trajectory directly.
 
 By default, the shared runner records at `optimizer_input`: after AMP unscaling
 and configured gradient clipping, immediately before the optimizer mutates or
