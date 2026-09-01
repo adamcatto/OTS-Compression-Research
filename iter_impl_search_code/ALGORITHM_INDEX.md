@@ -13,6 +13,7 @@
 | `F1` | complete; rate win, endpoint fidelity rejected | Randomized-Hadamard residual mixing with strict int8/FP16/FP32 fallback | synthesis branch from `D5`/`E2` findings | `experiments/F1/algorithm.py` | `experiments/F1/README.md` |
 | `F2` | complete; rate win, endpoint fidelity rejected | Global Lagrangian allocation over F1/FP16/FP32 using decoder-synchronized coarse Adam sensitivity | `F1` | `experiments/F2/algorithm.py` | `experiments/F2/README.md` |
 | `F2R` | complete; rate-matched placement partially accepted | Carried byte reservoir with optimizer-sensitive precision upgrades at exactly F1's payload rate | `F2` controlled follow-up | `experiments/F2R/algorithm.py` | `experiments/F2R/README.md` |
+| `G0` | complete feasibility audit; standalone tensor codecs rejected at 100x | Sampled exact-trace structural/rate audit: SVD, causal/shared bases, Kronecker, TT, Fourier, and residual entropy | new aggressive structural-generation branch informed by `E2`/`F2R` | `experiments/G0/algorithm.py` | `experiments/G0/README.md` |
 | `C1` | planned control | Numcodecs `BitRound`/`Quantize`, tuned to the same energy-R2 gate | `D1` comparison control | — | — |
 
 Read the listed writeups before extending an entry. New IDs are append-only;

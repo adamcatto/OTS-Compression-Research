@@ -12,6 +12,11 @@ lossy-gradient-replayed final models on the same held-out examples. They are
 computed from saved weights, so adding them did not rerun training or codec
 experiments.
 
+Analysis-only feasibility bundles are labeled explicitly. They retain exact
+code and complete sampled rows, but do not invent compression latency or final
+model outputs when no codec artifact or replay was created. `G0` is the first
+such pre-implementation gate.
+
 ## Final-model output comparison
 
 All rows below use the same 32 validation batches (131,072 next-token

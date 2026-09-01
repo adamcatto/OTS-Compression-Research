@@ -1,0 +1,48 @@
+{
+  "decoded_steps": [
+    0,
+    1,
+    99,
+    100,
+    499,
+    500,
+    998,
+    999
+  ],
+  "gaussian_signal_fraction_needed_before_residual_coding": 0.98441670840679,
+  "hard_target_bits_per_value": 0.32,
+  "hard_target_bytes_per_full_step": 194816.0,
+  "matrix_rows": 130,
+  "sampled_matrix_values": 24249600,
+  "sampled_steps": [
+    0,
+    1,
+    100,
+    500,
+    999
+  ],
+  "trace": "/Volumes/agocdrive/gradient-research/experiments/experiment_003/gradients.otsg",
+  "trace_steps_indexed": 1000,
+  "values_per_full_step": 4870400,
+  "weighted_metrics": {
+    "causal_rank8_gaussian_residual_bpv": 2.4430318071579076,
+    "causal_rank8_left_energy_fraction": 0.5534780944243857,
+    "causal_rank8_right_energy_fraction": 0.8205650365117418,
+    "causal_rank8_scalar_entropy_bpv": 2.5343376157130777,
+    "causal_rank8_two_sided_energy_fraction": 0.47929206352344267,
+    "fft_best_0p01_energy_fraction": 0.11247190369126912,
+    "fft_fixed_low_0p01_energy_fraction": 0.011891866948445092,
+    "kronecker_rank1_energy_fraction": 0.0284035348003503,
+    "kronecker_rank8_energy_fraction": 0.16140712928130177,
+    "oracle_rank8_scalar_entropy_bpv": 0.9249004841235395,
+    "self_rank1_energy_fraction": 0.6558278748053109,
+    "self_rank32_energy_fraction": 0.9935879972145086,
+    "self_rank8_energy_fraction": 0.9414707330162633,
+    "self_rank8_gaussian_residual_bpv": 0.7940457105966563,
+    "shared_causal_rank8_two_sided_energy_fraction": 0.32817681149042,
+    "temporal_oracle_scalar_r2": 0.32445569773863936,
+    "temporal_previous_r2": -0.19444550934305718,
+    "tt_rank8_energy_fraction": 0.5511235674478135,
+    "tt_rank8_fp16_factor_bpv": 0.2585312747426762
+  }
+}
