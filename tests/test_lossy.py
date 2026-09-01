@@ -134,3 +134,38 @@ def test_deltaq_adaptive_predictor_selects_per_block(tmp_path: Path) -> None:
     assert metrics.gradient_energy_r2 >= 0.999898
     assert metrics.codec_stats["previous_prediction_blocks"] > 0
     assert metrics.codec_stats["zero_prediction_blocks"] > 0
+
+
+def test_deltaq_sparse_outliers_enable_int8_inliers(tmp_path: Path) -> None:
+    block_size = 1_024
+    compressor = OTSDeltaQCompressor(
+        block_size=block_size,
+        prediction="zero",
+        outlier_fraction=1 / block_size,
+    )
+    gradient = torch.full((block_size,), 0.0039)
+    gradient[0] = 1.0
+
+    _, reconstruction, _, counts = compressor._encode_tensor(
+        gradient, torch.zeros_like(gradient)
+    )
+
+    assert compressor.name == "ots_deltaq_outlier_v1"
+    assert counts["int8_outlier_blocks"] == 1
+    assert counts["outlier_values"] == 1
+    relative_error = float(
+        (gradient - reconstruction).square().sum() / gradient.square().sum()
+    )
+    assert relative_error <= 1e-4
+
+    source = tmp_path / "outlier.otsg"
+    with GradientTraceWriter(source, experiment_id="outlier-unit") as writer:
+        writer.append(0, {"weight": gradient})
+    metrics = benchmark_deltaq(source, compressor, tmp_path / compressor.name)
+    assert metrics.gradient_energy_r2 >= 0.9999
+    assert metrics.codec_stats["int8_outlier_elements"] == block_size
+
+
+def test_deltaq_rejects_invalid_outlier_fraction() -> None:
+    with pytest.raises(ValueError, match="outlier_fraction"):
+        OTSDeltaQCompressor(outlier_fraction=1.0)

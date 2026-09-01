@@ -25,12 +25,14 @@ from ...core.gradient_trace import GradientStep, GradientTraceReader, GradientTr
 
 
 _MAGIC = b"OTSDQ001"
-_VERSION = 2
+_VERSION = 3
 _FILE_HEADER = struct.Struct("<8sHI")
 _RECORD_HEADER = struct.Struct("<4sQIQ")
 _RECORD_MAGIC = b"STEP"
 _BLOCK_HEADER = struct.Struct("<Bf")
 _INT8, _FLOAT16, _FLOAT32 = range(3)
+_INT8_OUTLIER = 3
+_OUTLIER_COUNT = struct.Struct("<I")
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,9 @@ class DeltaQStats:
     zero_prediction_blocks: int
     previous_prediction_elements: int
     zero_prediction_elements: int
+    int8_outlier_blocks: int
+    int8_outlier_elements: int
+    outlier_values: int
 
     def to_dict(self) -> dict:
         return {
@@ -62,6 +67,9 @@ class DeltaQStats:
             "zero_prediction_blocks": self.zero_prediction_blocks,
             "previous_prediction_elements": self.previous_prediction_elements,
             "zero_prediction_elements": self.zero_prediction_elements,
+            "int8_outlier_blocks": self.int8_outlier_blocks,
+            "int8_outlier_elements": self.int8_outlier_elements,
+            "outlier_values": self.outlier_values,
         }
 
 
@@ -104,6 +112,9 @@ class OTSDeltaQOnlineWriter:
             "zero_prediction_blocks": 0,
             "previous_prediction_elements": 0,
             "zero_prediction_elements": 0,
+            "int8_outlier_blocks": 0,
+            "int8_outlier_elements": 0,
+            "outlier_values": 0,
         }
         self._summary_path = Path(summary_path) if summary_path else None
         self._access_mode = access_mode
@@ -185,6 +196,9 @@ class OTSDeltaQOnlineWriter:
                         "zero_prediction_blocks",
                         "previous_prediction_elements",
                         "zero_prediction_elements",
+                        "int8_outlier_blocks",
+                        "int8_outlier_elements",
+                        "outlier_values",
                     )
                 },
                 encode_seconds=codec_seconds,
@@ -256,6 +270,7 @@ class OTSDeltaQCompressor:
         block_size: int = 16_384,
         relative_squared_error: float = 1e-4,
         prediction: str = "previous_decoded_gradient",
+        outlier_fraction: float = 0.0,
     ):
         if block_size <= 0:
             raise ValueError("block_size must be positive")
@@ -270,12 +285,17 @@ class OTSDeltaQCompressor:
                 "prediction must be 'previous_decoded_gradient', 'zero', "
                 "or 'adaptive_zero_previous'"
             )
+        if not 0.0 <= outlier_fraction < 1.0:
+            raise ValueError("outlier_fraction must be in [0, 1)")
         self.block_size = block_size
         self.relative_squared_error = relative_squared_error
         self.prediction = prediction
+        self.outlier_fraction = outlier_fraction
 
     @property
     def name(self) -> str:
+        if self.outlier_fraction:
+            return "ots_deltaq_outlier_v1"
         if self.prediction == "zero":
             return "ots_deltaq_zero_v1"
         if self.prediction == "adaptive_zero_previous":
@@ -289,6 +309,8 @@ class OTSDeltaQCompressor:
             "prediction": self.prediction,
             "int8_rounding": "nearest",
             "fallbacks": ["float16", "float32"],
+            "outlier_fraction": self.outlier_fraction,
+            "outlier_storage": "int32_index_plus_float16_value",
         }
 
     def open_online(
@@ -365,6 +387,9 @@ class OTSDeltaQCompressor:
             "zero_prediction_blocks": 0,
             "previous_prediction_elements": 0,
             "zero_prediction_elements": 0,
+            "int8_outlier_blocks": 0,
+            "int8_outlier_elements": 0,
+            "outlier_values": 0,
         }
         with Path(artifact_path).open("rb") as stream:
             header = _read_header(stream)
@@ -398,14 +423,29 @@ class OTSDeltaQCompressor:
                         code, _ = _BLOCK_HEADER.unpack_from(payload, cursor)
                         cursor += _BLOCK_HEADER.size
                         mode = code & 0x03
-                        width = {_INT8: 1, _FLOAT16: 2, _FLOAT32: 4}.get(mode)
-                        if width is None:
-                            raise ValueError("unknown OTS-DeltaQ block mode")
-                        label = {
-                            _INT8: "int8",
-                            _FLOAT16: "float16",
-                            _FLOAT32: "float32",
-                        }[mode]
+                        if mode == _INT8_OUTLIER:
+                            exception_count = _OUTLIER_COUNT.unpack_from(
+                                payload, cursor
+                            )[0]
+                            cursor += _OUTLIER_COUNT.size
+                            width = 1
+                            label = "int8_outlier"
+                            counters["outlier_values"] += exception_count
+                            exception_bytes = 6 * exception_count
+                        else:
+                            width = {
+                                _INT8: 1,
+                                _FLOAT16: 2,
+                                _FLOAT32: 4,
+                            }.get(mode)
+                            if width is None:
+                                raise ValueError("unknown OTS-DeltaQ block mode")
+                            label = {
+                                _INT8: "int8",
+                                _FLOAT16: "float16",
+                                _FLOAT32: "float32",
+                            }[mode]
+                            exception_bytes = 0
                         counters[f"{label}_blocks"] += 1
                         counters[f"{label}_elements"] += count
                         if configuration.get("prediction") == "zero":
@@ -420,7 +460,7 @@ class OTSDeltaQCompressor:
                         else:
                             counters["previous_prediction_blocks"] += 1
                             counters["previous_prediction_elements"] += count
-                        cursor += count * width
+                        cursor += count * width + exception_bytes
                         remaining -= count
                     if cursor != end:
                         raise ValueError("invalid OTS-DeltaQ tensor extent")
@@ -515,6 +555,9 @@ class OTSDeltaQCompressor:
             "zero_prediction_blocks": 0,
             "previous_prediction_elements": 0,
             "zero_prediction_elements": 0,
+            "int8_outlier_blocks": 0,
+            "int8_outlier_elements": 0,
+            "outlier_values": 0,
         }
         for offset in range(0, source.numel(), self.block_size):
             current = source[offset : offset + self.block_size]
@@ -539,9 +582,18 @@ class OTSDeltaQCompressor:
             output.write(encoded)
             reconstruction[offset : offset + current.numel()] = predicted + restored
             selected_prediction[offset : offset + current.numel()] = predicted
-            label = {_INT8: "int8", _FLOAT16: "float16", _FLOAT32: "float32"}[mode]
+            label = {
+                _INT8: "int8",
+                _FLOAT16: "float16",
+                _FLOAT32: "float32",
+                _INT8_OUTLIER: "int8_outlier",
+            }[mode]
             counts[f"{label}_blocks"] += 1
             counts[f"{label}_elements"] += current.numel()
+            if mode == _INT8_OUTLIER:
+                counts["outlier_values"] += _OUTLIER_COUNT.unpack_from(
+                    encoded, 0
+                )[0]
             predictor_label = (
                 "zero_prediction" if predictor_id else "previous_prediction"
             )
@@ -558,7 +610,57 @@ class OTSDeltaQCompressor:
         residual = value - prediction
         mode, scale, encoded, restored = self._encode_block(value, residual)
         error = float(torch.sum((residual - restored).square(), dtype=torch.float64))
+        if self.outlier_fraction:
+            outlier = self._encode_outlier_block(value, residual)
+            if outlier is not None:
+                outlier_mode, outlier_scale, outlier_encoded, outlier_restored = outlier
+                outlier_error = float(
+                    torch.sum(
+                        (residual - outlier_restored).square(), dtype=torch.float64
+                    )
+                )
+                if (len(outlier_encoded), outlier_error) < (len(encoded), error):
+                    mode = outlier_mode
+                    scale = outlier_scale
+                    encoded = outlier_encoded
+                    restored = outlier_restored
+                    error = outlier_error
         return mode, scale, encoded, restored, error, predictor_id, prediction
+
+    def _encode_outlier_block(
+        self, value: torch.Tensor, residual: torch.Tensor
+    ) -> Optional[Tuple[int, float, bytes, torch.Tensor]]:
+        count = residual.numel()
+        exception_count = max(1, math.ceil(count * self.outlier_fraction))
+        if count == 0 or exception_count >= count:
+            return None
+        exception_indices = torch.topk(
+            residual.abs(), exception_count, sorted=False
+        ).indices
+        inlier_residual = residual.clone()
+        inlier_residual[exception_indices] = 0.0
+        maximum = float(inlier_residual.abs().max())
+        scale = maximum / 127.0 if maximum else 1.0
+        quantized = torch.round(inlier_residual / scale).clamp(-127, 127).to(
+            torch.int8
+        )
+        exceptions = residual[exception_indices].to(torch.float16)
+        restored = quantized.to(torch.float32) * scale
+        restored[exception_indices] = exceptions.to(torch.float32)
+        energy = float(torch.sum(value.square(), dtype=torch.float64))
+        if not _within_budget(
+            value, residual - restored, energy, self.relative_squared_error
+        ):
+            return None
+        encoded = b"".join(
+            (
+                _OUTLIER_COUNT.pack(exception_count),
+                quantized.numpy().tobytes(),
+                exception_indices.to(torch.int32).numpy().tobytes(),
+                exceptions.numpy().tobytes(),
+            )
+        )
+        return _INT8_OUTLIER, scale, encoded, restored
 
     def _encode_block(self, value: torch.Tensor, residual: torch.Tensor) -> Tuple[int, float, bytes, torch.Tensor]:
         energy = float(torch.sum(value.square(), dtype=torch.float64))
@@ -583,18 +685,53 @@ class OTSDeltaQCompressor:
             code, scale = _BLOCK_HEADER.unpack_from(payload, cursor)
             cursor += _BLOCK_HEADER.size
             mode = code & 0x03
-            byte_count = count * ({_INT8: 1, _FLOAT16: 2, _FLOAT32: 4}.get(mode, 0))
-            if not byte_count or cursor + byte_count > len(payload):
-                raise ValueError("invalid OTS-DeltaQ tensor payload")
-            raw = payload[cursor : cursor + byte_count]
-            cursor += byte_count
+            if mode == _INT8_OUTLIER:
+                if cursor + _OUTLIER_COUNT.size > len(payload):
+                    raise ValueError("invalid OTS-DeltaQ outlier count")
+                exception_count = _OUTLIER_COUNT.unpack_from(payload, cursor)[0]
+                cursor += _OUTLIER_COUNT.size
+                dense_bytes = count
+                index_bytes = 4 * exception_count
+                value_bytes = 2 * exception_count
+                end = cursor + dense_bytes + index_bytes + value_bytes
+                if end > len(payload):
+                    raise ValueError("invalid OTS-DeltaQ outlier payload")
+                dense = payload[cursor : cursor + dense_bytes]
+                cursor += dense_bytes
+                raw_indices = payload[cursor : cursor + index_bytes]
+                cursor += index_bytes
+                raw_values = payload[cursor : cursor + value_bytes]
+                cursor += value_bytes
+                residual = (
+                    torch.frombuffer(bytearray(dense), dtype=torch.int8).to(
+                        torch.float32
+                    )
+                    * scale
+                )
+                indices = torch.frombuffer(
+                    bytearray(raw_indices), dtype=torch.int32
+                ).to(torch.int64)
+                exceptions = torch.frombuffer(
+                    bytearray(raw_values), dtype=torch.float16
+                ).to(torch.float32)
+                if exception_count and int(indices.max()) >= count:
+                    raise ValueError("OTS-DeltaQ outlier index is out of range")
+                residual[indices] = exceptions
+            else:
+                byte_count = count * (
+                    {_INT8: 1, _FLOAT16: 2, _FLOAT32: 4}.get(mode, 0)
+                )
+                if not byte_count or cursor + byte_count > len(payload):
+                    raise ValueError("invalid OTS-DeltaQ tensor payload")
+                raw = payload[cursor : cursor + byte_count]
+                cursor += byte_count
             if mode == _INT8:
                 residual = torch.frombuffer(bytearray(raw), dtype=torch.int8).to(torch.float32) * scale
             elif mode == _FLOAT16:
                 residual = torch.frombuffer(bytearray(raw), dtype=torch.float16).to(torch.float32)
             elif mode == _FLOAT32:
                 residual = torch.frombuffer(bytearray(raw), dtype=torch.float32).clone()
-            else:
+            elif mode != _INT8_OUTLIER:
                 raise ValueError("unknown OTS-DeltaQ block mode")
             if self.prediction == "adaptive_zero_previous" and code & 0x04:
                 predicted = torch.zeros(count, dtype=torch.float32)
@@ -715,6 +852,9 @@ def summarize_prediction_metrics(path: Path) -> Dict[str, Any]:
                 "zero_prediction_blocks",
                 "previous_prediction_elements",
                 "zero_prediction_elements",
+                "int8_outlier_blocks",
+                "int8_outlier_elements",
+                "outlier_values",
             )
             if all(field in row for row in rows)
         },
@@ -745,6 +885,6 @@ def _read_exact(stream, count: int, context: str) -> bytes:
 
 def _read_header(stream) -> Mapping[str, object]:
     magic, version, size = _FILE_HEADER.unpack(_read_exact(stream, _FILE_HEADER.size, "header"))
-    if magic != _MAGIC or version not in {1, 2}:
+    if magic != _MAGIC or version not in {1, 2, 3}:
         raise ValueError("not a supported OTS-DeltaQ artifact")
     return json.loads(_read_exact(stream, size, "header metadata"))

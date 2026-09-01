@@ -15,6 +15,7 @@ def main() -> int:
     parser.add_argument("--experiment", required=True)
     parser.add_argument("--block-size", type=int, default=16_384)
     parser.add_argument("--relative-squared-error", type=float, default=1e-4)
+    parser.add_argument("--outlier-fraction", type=float, default=0.0)
     parser.add_argument(
         "--prediction",
         choices=[
@@ -44,6 +45,7 @@ def main() -> int:
         block_size=args.block_size,
         relative_squared_error=args.relative_squared_error,
         prediction=args.prediction,
+        outlier_fraction=args.outlier_fraction,
     )
     mode = (
         "online"

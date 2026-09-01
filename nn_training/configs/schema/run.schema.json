@@ -102,7 +102,8 @@
               "enum": [
                 "ots_deltaq_v1",
                 "ots_deltaq_zero_v1",
-                "ots_deltaq_adaptive_predictor_v1"
+                "ots_deltaq_adaptive_predictor_v1",
+                "ots_deltaq_outlier_v1"
               ]
             },
             "block_size": {
@@ -116,6 +117,11 @@
             },
             "save_predictions": {
               "type": "boolean"
+            },
+            "outlier_fraction": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMaximum": 1
             }
           }
         }
