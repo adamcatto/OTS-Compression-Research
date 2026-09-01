@@ -1,0 +1,73 @@
+{
+  "cumulative_error_l2": 0.2366719487153974,
+  "cumulative_error_relative_l2": 0.0027601432674399136,
+  "cumulative_error_rms_per_parameter": 0.00010724189297896829,
+  "cumulative_gradient_l2": 85.74625509744472,
+  "gradient_energy_r2": 0.9999301430873171,
+  "largest_cumulative_error_tensors": [
+    {
+      "cumulative_error_l2": 0.14326462583282012,
+      "cumulative_error_relative_l2": 0.0017328578764232616,
+      "cumulative_gradient_l2": 82.67534676792317,
+      "name": "token_embedding.weight"
+    },
+    {
+      "cumulative_error_l2": 0.07784238343096589,
+      "cumulative_error_relative_l2": 0.011352678558392646,
+      "cumulative_gradient_l2": 6.856741607769709,
+      "name": "transformer.layers.0.self_attn.in_proj_weight"
+    },
+    {
+      "cumulative_error_l2": 0.07765457517551803,
+      "cumulative_error_relative_l2": 0.012752280001701343,
+      "cumulative_gradient_l2": 6.089465975116431,
+      "name": "transformer.layers.0.self_attn.out_proj.weight"
+    },
+    {
+      "cumulative_error_l2": 0.05837401770812169,
+      "cumulative_error_relative_l2": 0.006224581359973694,
+      "cumulative_gradient_l2": 9.377982924841774,
+      "name": "position_embedding"
+    },
+    {
+      "cumulative_error_l2": 0.05588086068207136,
+      "cumulative_error_relative_l2": 0.01087183783452478,
+      "cumulative_gradient_l2": 5.139964514979723,
+      "name": "transformer.layers.0.linear2.weight"
+    },
+    {
+      "cumulative_error_l2": 0.053356994882595564,
+      "cumulative_error_relative_l2": 0.009931032672723302,
+      "cumulative_gradient_l2": 5.3727539361688486,
+      "name": "transformer.layers.0.linear1.weight"
+    },
+    {
+      "cumulative_error_l2": 0.046234753342958915,
+      "cumulative_error_relative_l2": 0.009786441310082815,
+      "cumulative_gradient_l2": 4.724368325320051,
+      "name": "transformer.layers.1.self_attn.out_proj.weight"
+    },
+    {
+      "cumulative_error_l2": 0.035232116179743506,
+      "cumulative_error_relative_l2": 0.007828354164210025,
+      "cumulative_gradient_l2": 4.500577700076354,
+      "name": "transformer.layers.2.self_attn.out_proj.weight"
+    },
+    {
+      "cumulative_error_l2": 0.0331168837912532,
+      "cumulative_error_relative_l2": 0.009156540803976513,
+      "cumulative_gradient_l2": 3.616746159954987,
+      "name": "transformer.layers.1.self_attn.in_proj_weight"
+    },
+    {
+      "cumulative_error_l2": 0.03139186397536264,
+      "cumulative_error_relative_l2": 0.01113103527670293,
+      "cumulative_gradient_l2": 2.820210626864626,
+      "name": "transformer.layers.1.linear2.weight"
+    }
+  ],
+  "scalar_error_mean": -5.3638708581691054e-11,
+  "scalar_error_rms": 3.3962030015285545e-06,
+  "steps": 1000,
+  "values": 4870400000
+}

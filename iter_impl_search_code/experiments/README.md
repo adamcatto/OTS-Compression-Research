@@ -28,7 +28,10 @@ for comparing algorithms.
 | D5 | +1.434e-4 | 2.21637976 | 5.062e-5 | 1.076e-5 | 99.7200% | 11.7954% |
 | E1 | -5.186e-6 | 2.21633470 | 5.561e-6 | 1.406e-6 | 99.8466% | 1.2381% |
 | E2 | +7.269e-6 | 2.21633710 | 7.963e-6 | 2.038e-6 | 99.8520% | 1.0389% |
+| F1 | +1.098e-3 | 2.21720750 | 8.784e-4 | 2.884e-4 | 99.7032% | 28.2482% |
 
 The raw teacher-to-lossy cross-entropy changes little because most of it is the
 teacher's entropy. D3 is the closest output distribution in this comparison;
-D5 is the most divergent, consistent with its more aggressive quantizer.
+F1 is the most divergent despite its strict local error gate, showing that
+rotation changes where error lands in ways that raw gradient R2 does not
+capture.

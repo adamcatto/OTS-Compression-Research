@@ -75,6 +75,12 @@ visibly disrupting the scalar loss curve. Future candidates must report both
 loss-curve and final-weight agreement, and should test error-feedback or
 explicitly bias-controlled residual coding when pushing toward D5's rate.
 
+A later F1 diagnosis computed `trajectory_error.json` from D5's saved decoded
+trace without rerunning the codec. The step-summed reconstruction error has L2
+0.20470, or 0.2387% of the step-summed exact-gradient L2; its global scalar
+mean is `3.80e-11`. This provides the like-for-like accumulation control used
+in the F1 writeup.
+
 ## Next decision
 
 Do not continue tuning the outlier fraction immediately. Start a distinct E
