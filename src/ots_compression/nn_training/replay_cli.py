@@ -14,12 +14,24 @@ def main() -> int:
     parser.add_argument("--experiment", required=True)
     parser.add_argument("--gradient-trace", required=True)
     parser.add_argument("--destination", type=Path, required=True)
+    parser.add_argument("--final-eval-batches", type=int, default=32)
     args = parser.parse_args()
     root = Settings.load().experiments_dir
     experiment = Path(args.experiment)
     if not experiment.is_dir():
         experiment = root / (f"experiment_{int(args.experiment):03d}" if args.experiment.isdigit() else args.experiment)
-    print(json.dumps(replay_experiment(experiment, Path(args.gradient_trace), args.destination).to_dict(), indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            replay_experiment(
+                experiment,
+                Path(args.gradient_trace),
+                args.destination,
+                final_eval_batches=args.final_eval_batches,
+            ).to_dict(),
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 

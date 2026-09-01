@@ -260,8 +260,15 @@ class VisionClassificationTask(TrainingTask):
     def loss(
         self, model: nn.Module, batch: Any, spec: ExperimentSpec
     ) -> torch.Tensor:
+        logits, labels = self.logits_and_targets(model, batch, spec)
+        return F.cross_entropy(logits, labels)
+
+    def logits_and_targets(
+        self, model: nn.Module, batch: Any, spec: ExperimentSpec
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        del spec
         images, labels = batch
-        return F.cross_entropy(model(images), labels)
+        return model(images), labels
 
 
 class VisionSegmentationTask(TrainingTask):
@@ -316,5 +323,16 @@ class VisionSegmentationTask(TrainingTask):
     def loss(
         self, model: nn.Module, batch: Any, spec: ExperimentSpec
     ) -> torch.Tensor:
+        logits, masks = self.logits_and_targets(model, batch, spec)
+        return F.cross_entropy(logits, masks)
+
+    def logits_and_targets(
+        self, model: nn.Module, batch: Any, spec: ExperimentSpec
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        del spec
         images, masks = batch
-        return F.cross_entropy(model(images), masks, ignore_index=255)
+        logits = model(images)
+        logits = logits.permute(0, 2, 3, 1).reshape(-1, logits.shape[1])
+        masks = masks.reshape(-1)
+        valid = masks != 255
+        return logits[valid], masks[valid]

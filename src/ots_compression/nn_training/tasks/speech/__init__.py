@@ -254,5 +254,12 @@ class SpeechCommandsTask(TrainingTask):
     def loss(
         self, model: nn.Module, batch: Any, spec: ExperimentSpec
     ) -> torch.Tensor:
+        logits, labels = self.logits_and_targets(model, batch, spec)
+        return F.cross_entropy(logits, labels)
+
+    def logits_and_targets(
+        self, model: nn.Module, batch: Any, spec: ExperimentSpec
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        del spec
         waveforms, labels = batch
-        return F.cross_entropy(model(waveforms), labels)
+        return model(waveforms), labels

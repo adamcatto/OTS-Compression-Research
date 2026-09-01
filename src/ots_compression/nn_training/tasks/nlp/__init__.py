@@ -293,7 +293,14 @@ class CausalLanguageModelingTask(TrainingTask):
     def loss(
         self, model: nn.Module, batch: Any, spec: ExperimentSpec
     ) -> torch.Tensor:
+        logits, targets = self.logits_and_targets(model, batch, spec)
+        return F.cross_entropy(logits, targets)
+
+    def logits_and_targets(
+        self, model: nn.Module, batch: Any, spec: ExperimentSpec
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        del spec
         inputs, targets = batch
         output = model(inputs)
         logits = output.logits if hasattr(output, "logits") else output
-        return F.cross_entropy(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
+        return logits.reshape(-1, logits.shape[-1]), targets.reshape(-1)

@@ -14,6 +14,7 @@ from ..core.gradient_trace import GradientTraceReader
 from ..core.settings import Settings
 from .runner import _move_to_device, _next_batch, _optimizer, _resolve_device, _scheduler, _seed_everything
 from .tasks import default_task_registry
+from .final_model_eval import evaluate_saved_final_models
 
 
 @dataclass(frozen=True)
@@ -24,12 +25,19 @@ class ReplayMetrics:
     loss_mae: float
     loss_rmse: float
     loss_max_absolute_error: float
+    final_model_output_metrics: dict
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
-def replay_experiment(experiment_path: Path, gradient_trace: Path, destination: Path) -> ReplayMetrics:
+def replay_experiment(
+    experiment_path: Path,
+    gradient_trace: Path,
+    destination: Path,
+    *,
+    final_eval_batches: int = 32,
+) -> ReplayMetrics:
     """Apply a trace to the saved initial model and compare it with the final model.
 
     Losses are evaluated before each update on a recreated data-loader sequence.
@@ -81,6 +89,18 @@ def replay_experiment(experiment_path: Path, gradient_trace: Path, destination: 
         difference += float(torch.sum((replay_value - target_value).square()))
     count = min(len(recorded_losses), len(replay_losses))
     deltas = [replay_losses[index] - recorded_losses[index] for index in range(count)]
+    destination.mkdir(parents=True, exist_ok=True)
+    replayed_model_path = destination / "replayed_final_model.pt"
+    torch.save(
+        {name: value.detach().cpu() for name, value in model.state_dict().items()},
+        replayed_model_path,
+    )
+    final_output_metrics = evaluate_saved_final_models(
+        experiment_path,
+        replayed_model_path,
+        destination,
+        max_batches=final_eval_batches,
+    )
     metrics = ReplayMetrics(
         steps=count,
         final_weight_relative_l2=math.sqrt(difference / max(source_energy, 1e-30)),
@@ -88,11 +108,10 @@ def replay_experiment(experiment_path: Path, gradient_trace: Path, destination: 
         loss_mae=sum(abs(value) for value in deltas) / max(count, 1),
         loss_rmse=math.sqrt(sum(value * value for value in deltas) / max(count, 1)),
         loss_max_absolute_error=max((abs(value) for value in deltas), default=0.0),
+        final_model_output_metrics=final_output_metrics.to_dict(),
     )
-    destination.mkdir(parents=True, exist_ok=True)
     (destination / "replay_metrics.json").write_text(json.dumps(metrics.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     with (destination / "replay_loss_curve.jsonl").open("w", encoding="utf-8") as stream:
         for step, (original_loss, replay_loss) in enumerate(zip(recorded_losses, replay_losses)):
             stream.write(json.dumps({"step": step, "original_loss": original_loss, "replay_loss": replay_loss, "delta": replay_loss - original_loss}, sort_keys=True) + "\n")
-    torch.save({name: value.detach().cpu() for name, value in model.state_dict().items()}, destination / "replayed_final_model.pt")
     return metrics

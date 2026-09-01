@@ -54,6 +54,20 @@ class TrainingTask(ABC):
     ) -> torch.Tensor:
         raise NotImplementedError
 
+    def logits_and_targets(
+        self, model: torch.nn.Module, batch: Any, spec: ExperimentSpec
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Return canonical ``[examples, classes]`` logits and label indices.
+
+        Tasks using cross-entropy should override this so final models can be
+        compared on identical examples. Invalid/ignored targets must be removed
+        by the task before returning.
+        """
+
+        raise NotImplementedError(
+            f"task {self.name!r} does not expose classification logits"
+        )
+
 
 class TaskRegistry:
     def __init__(self) -> None:
