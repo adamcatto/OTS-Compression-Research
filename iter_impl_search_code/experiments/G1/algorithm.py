@@ -562,7 +562,8 @@ def run_step(current: Mapping[str, torch.Tensor], previous: Mapping[str, torch.T
 
 
 def run_trace(trace: Path, steps: list[int], *, budget_bits_per_value: float = 0.32,
-              stop_r2: float = 0.99) -> tuple[list[dict[str, object]], dict[str, object]]:
+              fidelity_r2: float = 0.99,
+              abort_r2: float = 0.90) -> tuple[list[dict[str, object]], dict[str, object]]:
     requested = set(steps)
     requested.update(step - 1 for step in steps)
     snapshots = _read_selected_steps(trace, requested)
@@ -580,17 +581,28 @@ def run_trace(trace: Path, steps: list[int], *, budget_bits_per_value: float = 0
         row.update({f"causal_{key}": value for key, value in causal.items() if key != "candidate_kind"})
         row.update({f"frontier_{key}": value for key, value in frontier.items() if key != "candidate_kind"})
         rows.append(row)
-        if float(frontier["gradient_energy_r2"]) < stop_r2:
+        if float(frontier["gradient_energy_r2"]) < abort_r2:
             stopped_early = True
             break
+    fidelity_failed = any(
+        float(row["frontier_gradient_energy_r2"]) < fidelity_r2 for row in rows
+    )
+    if stopped_early:
+        decision = "reject_gradient_only_g1_aborted_below_continuation_cutoff"
+    elif fidelity_failed:
+        decision = "reject_gradient_only_g1_completed_sample"
+    else:
+        decision = "authorize_short_causal_prefix"
     summary = {
         "trace": str(trace),
         "requested_steps": steps,
         "executed_steps": [int(row["step"]) for row in rows],
         "hard_target_bits_per_value": budget_bits_per_value,
-        "fidelity_gate_r2": stop_r2,
+        "fidelity_gate_r2": fidelity_r2,
+        "continuation_abort_r2": abort_r2,
         "stopped_early": stopped_early,
-        "decision": "reject_gradient_only_g1" if stopped_early else "authorize_short_causal_prefix",
+        "completed_requested_steps": len(rows) == len(steps),
+        "decision": decision,
         "gate_frontier": "paid_current_svd_augmented_selector",
         "rows": rows,
     }
@@ -604,13 +616,15 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--budget-bpv", type=float, default=0.32)
-    parser.add_argument("--stop-r2", type=float, default=0.99)
+    parser.add_argument("--fidelity-r2", type=float, default=0.99)
+    parser.add_argument("--abort-r2", type=float, default=0.90)
     args = parser.parse_args()
     rows, summary = run_trace(
         args.trace,
         [int(value) for value in args.steps.split(",")],
         budget_bits_per_value=args.budget_bpv,
-        stop_r2=args.stop_r2,
+        fidelity_r2=args.fidelity_r2,
+        abort_r2=args.abort_r2,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8", newline="") as stream:

@@ -399,8 +399,11 @@ residuals, and paid current-SVD factors. At step 100, causal-only achieved
 `R2 = 0.988715` at `0.319202` bpv; adding paid current factors passed with
 `R2 = 0.993601` at `0.319281` bpv. At step 500, however, causal-only fell to
 `0.960141`, and even the paid-current-factor frontier reached only `0.970510`
-at `0.319258` bpv. The gate therefore stopped the run before step 999 and did
-not authorize replay. See `experiments/G1/README.md` and `results.csv`.
+at `0.319258` bpv. Because this remained above the separately approved 0.90
+continuation cutoff, evaluation proceeded to step 999: causal-only reached
+`0.934341`, and the paid-current-factor frontier reached `0.948499` at
+`0.319195` bpv. The sampled evaluation completed, but the 0.99 fidelity gate
+did not authorize replay. See `experiments/G1/README.md` and `results.csv`.
 The G0 TT and Kronecker measurements remained comparison controls rather than
 being promoted into byte codecs because their energy capture was substantially
 below even the rejected G1 frontier.

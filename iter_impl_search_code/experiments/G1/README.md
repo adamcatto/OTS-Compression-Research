@@ -44,8 +44,9 @@ prior basis, making this an optimistic upper bound. The global ledger includes
 all chunk metadata, residual indices and values, factor/core payloads, and
 these amortized charges.
 
-The requested order was steps 100, 500, and 999. A step authorizes the next one
-only if the widened paid-factor frontier reaches global energy `R2 >= 0.99`.
+The requested order was steps 100, 500, and 999. Global energy `R2 >= 0.99`
+remains the scientific fidelity gate. Following the continuation decision, a
+separate `R2 < 0.90` cutoff is the only condition that aborts the sampled run.
 
 ## Result
 
@@ -54,10 +55,12 @@ The hard stream budget is 194,816 bytes.
 
 | Step | Frontier | Bytes | bpv | Ratio | Energy R2 | Cosine | Encode | Decode |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | exact-prior causal only | 194,330 | 0.319202 | 100.250x | 0.988715 | 0.994343 | 6.846 s | 0.204 s |
-| 100 | + paid current-SVD factors | 194,378 | 0.319281 | 100.225x | **0.993601** | 0.996796 | 7.091 s | 0.125 s |
-| 500 | exact-prior causal only | 194,375 | 0.319276 | 100.227x | 0.960141 | 0.979883 | 6.922 s | 0.207 s |
-| 500 | + paid current-SVD factors | 194,364 | 0.319258 | 100.233x | **0.970510** | 0.985163 | 6.920 s | 0.090 s |
+| 100 | exact-prior causal only | 194,330 | 0.319202 | 100.250x | 0.988715 | 0.994343 | 6.986 s | 0.207 s |
+| 100 | + paid current-SVD factors | 194,378 | 0.319281 | 100.225x | **0.993601** | 0.996796 | 7.189 s | 0.133 s |
+| 500 | exact-prior causal only | 194,375 | 0.319276 | 100.227x | 0.960141 | 0.979883 | 6.792 s | 0.240 s |
+| 500 | + paid current-SVD factors | 194,364 | 0.319258 | 100.233x | **0.970510** | 0.985163 | 7.009 s | 0.095 s |
+| 999 | exact-prior causal only | 194,259 | 0.319085 | 100.287x | 0.934341 | 0.966629 | 7.160 s | 0.210 s |
+| 999 | + paid current-SVD factors | 194,326 | 0.319195 | 100.252x | **0.948499** | 0.973936 | 6.971 s | 0.084 s |
 
 The paid current-factor option makes step 100 feasible, and rank-64 plus
 sparse/bulk candidates improve the causal-only result to within 0.001285 of
@@ -74,10 +77,14 @@ captured 16.14%. They were not rerun as byte codecs because G1 already includes
 the more favorable ordinary low-rank and low-rank-plus-sparse cases. At step
 500, G0's free current rank-32 approximation captured 98.697% before factor
 quantization or bytes; G1 shows that the globally allocated, paid, quantized
-mixture reaches 97.051% under the complete ledger.
+mixture reaches 97.051% under the complete ledger. By step 999, the widened
+frontier declines further to 94.850%.
 
-The configured early stop therefore fired at step 500. Step 999, optimizer
-replay, endpoint weights, and final-model distribution metrics were not run.
+Step 500 failed the scientific fidelity gate but remained above the 0.90
+continuation cutoff, so the run continued through step 999. Step 999 also
+remained above the continuation cutoff. All three planned checkpoints were
+therefore evaluated. Optimizer replay, endpoint weights, and final-model
+distribution metrics were not run because the 0.99 protocol gate failed.
 `final_model_outputs.csv` is intentionally absent because no replayed model
 exists.
 
@@ -94,13 +101,14 @@ negative late-step result especially informative:
 2. Mode selection is post-hoc and sees the current gradient's exact errors.
 3. The widened frontier can transmit current low-rank factors, not just reuse
    stale bases.
-4. The result still falls from 0.99360 at step 100 to 0.97051 at step 500.
+4. The result falls from 0.99360 at step 100 to 0.97051 at step 500 and
+   0.94850 at step 999.
 
 The limiting issue is late-training innovation, not merely factor overhead or
-a poor fixed rank. More elaborate learned factor priors would need to recover
-most of the missing 1.949 percentage points of full-gradient energy at
-essentially zero extra rate. G0's weak temporal signal and G1's exact-prior
-failure make that an unfavorable next bet.
+a poor fixed rank. At step 999, a more elaborate learned factor prior would
+need to recover most of the missing 4.150 percentage points of full-gradient
+energy at essentially zero extra rate. G0's weak temporal signal and G1's
+exact-prior failure make that an unfavorable next bet.
 
 The next experiment should be **G1P**, the separately labeled procedural
 side-information control: regenerate gradients from batch/RNG/training state,
@@ -119,6 +127,5 @@ python -m iter_impl_search_code.experiments.G1.algorithm \
 ```
 
 The trace is indexed in place. Only steps 99, 100, 499, 500, 998, and 999 are
-requested from the reader; because decoding happens before the sequential
-gate, those six records are read, but candidate generation stops after step
-500. No multi-gigabyte copy or compressed artifact is created.
+decoded, and candidate generation completes for steps 100, 500, and 999. No
+multi-gigabyte copy or compressed artifact is created.
