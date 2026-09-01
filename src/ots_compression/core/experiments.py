@@ -78,7 +78,8 @@ class Experiment:
 
     @property
     def baseline_results_path(self) -> Path:
-        return self.path / "baselines"
+        """Compatibility alias for the exact-codec result directory."""
+        return self.path / "lossless"
 
 
 class ExperimentStore:

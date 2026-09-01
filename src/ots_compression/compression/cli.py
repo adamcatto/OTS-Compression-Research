@@ -77,7 +77,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for name in names:
         compressor = registry[name]
         for mode in modes:
-            destination = experiment / "baselines" / name / mode.value
+            destination = experiment / "lossless" / name / mode.value
             artifact = destination / "compressed.otsc"
             metrics = benchmark_trace(
                 trace, compressor, mode, artifact_path=artifact
@@ -94,11 +94,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 }
             )
     stored_metrics = []
-    for metrics_path in (experiment / "baselines").glob("*/*/metrics.json"):
+    for metrics_path in (experiment / "lossless").glob("*/*/metrics.json"):
         stored_metrics.append(
             BenchmarkMetrics(**json.loads(metrics_path.read_text(encoding="utf-8")))
         )
-    write_metrics_table(stored_metrics, experiment / "baselines")
+    write_metrics_table(stored_metrics, experiment / "lossless")
     print(json.dumps(results, indent=2, sort_keys=True))
     return 0
 

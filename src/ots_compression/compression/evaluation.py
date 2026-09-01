@@ -283,7 +283,7 @@ def benchmark_experiment(
     compressor: Compressor,
     mode: AccessMode,
 ) -> BenchmarkMetrics:
-    destination = experiment.baseline_results_path / compressor.name / mode.value
+    destination = experiment.path / "lossless" / compressor.name / mode.value
     metrics = benchmark_trace(
         experiment.gradients_path,
         compressor,
