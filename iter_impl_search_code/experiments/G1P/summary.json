@@ -1,0 +1,118 @@
+{
+  "all_sampled_steps_bit_exact": false,
+  "all_sampled_steps_pass": true,
+  "amortized_bytes_per_step": 19835.448,
+  "bits_per_value": 0.032581222076215506,
+  "compression_ratio_vs_fp32_gradients": 982.1608264154155,
+  "continuation_abort_r2": 0.9,
+  "decision": "procedural_side_information_control_passes_sampled_gate",
+  "endpoint_completed": true,
+  "executed_steps": [
+    0,
+    1,
+    100,
+    500,
+    999
+  ],
+  "experiment": "/Volumes/agocdrive/gradient-research/experiments/experiment_003",
+  "external_side_information": [
+    "dataset content matching dataset_tokens_sha256",
+    "OTS repository matching repository_commit",
+    "compatible Python/PyTorch execution environment"
+  ],
+  "fidelity_gate_r2": 0.99,
+  "final_weight_metrics": {
+    "bit_exact": false,
+    "cosine_similarity": 0.9999999999104652,
+    "gradient_energy_r2": 0.9999999998209298,
+    "maximum_absolute_error": 0.00018548713705968112,
+    "relative_l2_error": 1.3381709986841357e-05
+  },
+  "gradient_values_per_step": 4870400,
+  "hard_budget_bits_per_value": 0.32,
+  "initial_model_bytes": 19769774,
+  "maximum_additional_keyframes_under_budget": 2,
+  "minimum_sampled_r2": 0.9999999999837881,
+  "optional_keyframe_bytes": 58795833,
+  "replayed_model": "/Volumes/agocdrive/gradient-research/experiments/experiment_003/lossy/g1p/replayed_final_model.pt",
+  "requested_steps": [
+    0,
+    1,
+    100,
+    500,
+    999
+  ],
+  "rows": [
+    {
+      "absolute_loss_error": 0.0,
+      "bit_exact": false,
+      "cosine_similarity": 0.9999999999999957,
+      "cumulative_decode_seconds": 0.5459233329999993,
+      "gradient_energy_r2": 0.9999999999999917,
+      "gradient_seconds": 0.4863865839999999,
+      "loss": 5.618451118469238,
+      "maximum_absolute_error": 2.2351741790771484e-08,
+      "recorded_loss": 5.618451118469238,
+      "relative_l2_error": 9.137953209818268e-08,
+      "step": 0
+    },
+    {
+      "absolute_loss_error": 0.0,
+      "bit_exact": false,
+      "cosine_similarity": 0.9999999999999857,
+      "cumulative_decode_seconds": 0.9960344579999987,
+      "gradient_energy_r2": 0.9999999999999712,
+      "gradient_seconds": 0.19478316699999887,
+      "loss": 5.585500240325928,
+      "maximum_absolute_error": 3.725290298461914e-08,
+      "recorded_loss": 5.585500240325928,
+      "relative_l2_error": 1.6969580323994846e-07,
+      "step": 1
+    },
+    {
+      "absolute_loss_error": 0.0,
+      "bit_exact": false,
+      "cosine_similarity": 0.9999999999995924,
+      "cumulative_decode_seconds": 19.554529583,
+      "gradient_energy_r2": 0.9999999999990932,
+      "gradient_seconds": 0.1791979579999996,
+      "loss": 2.632249593734741,
+      "maximum_absolute_error": 6.332993507385254e-08,
+      "recorded_loss": 2.632249593734741,
+      "relative_l2_error": 9.522599950059519e-07,
+      "step": 100
+    },
+    {
+      "absolute_loss_error": 2.384185791015625e-07,
+      "bit_exact": false,
+      "cosine_similarity": 0.9999999999987261,
+      "cumulative_decode_seconds": 132.2919325,
+      "gradient_energy_r2": 0.9999999999974256,
+      "gradient_seconds": 0.26062804199997913,
+      "loss": 2.381009340286255,
+      "maximum_absolute_error": 1.0617077350616455e-07,
+      "recorded_loss": 2.381009578704834,
+      "relative_l2_error": 1.6044755255754847e-06,
+      "step": 500
+    },
+    {
+      "absolute_loss_error": 2.384185791015625e-07,
+      "bit_exact": false,
+      "cosine_similarity": 0.9999999999919001,
+      "cumulative_decode_seconds": 318.106437625,
+      "gradient_energy_r2": 0.9999999999837881,
+      "gradient_seconds": 0.23490212499996233,
+      "loss": 2.1219475269317627,
+      "maximum_absolute_error": 2.1792948246002197e-07,
+      "recorded_loss": 2.1219472885131836,
+      "relative_l2_error": 4.026403948462171e-06,
+      "step": 999
+    }
+  ],
+  "sequential_decode_seconds": 318.231763167,
+  "stopped_early": false,
+  "trace": "/Volumes/agocdrive/gradient-research/experiments/experiment_003/gradients.otsg",
+  "training_steps": 1000,
+  "transcript_bytes": 19835448,
+  "within_hard_budget": true
+}

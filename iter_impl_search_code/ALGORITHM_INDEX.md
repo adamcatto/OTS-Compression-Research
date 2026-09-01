@@ -15,6 +15,7 @@
 | `F2R` | complete; rate-matched placement partially accepted | Carried byte reservoir with optimizer-sensitive precision upgrades at exactly F1's payload rate | `F2` controlled follow-up | `experiments/F2R/algorithm.py` | `experiments/F2R/README.md` |
 | `G0` | complete feasibility audit; standalone tensor codecs rejected at 100x | Sampled exact-trace structural/rate audit: SVD, causal/shared bases, Kronecker, TT, Fourier, and residual entropy | new aggressive structural-generation branch informed by `E2`/`F2R` | `experiments/G0/algorithm.py` | `experiments/G0/README.md` |
 | `G1` | complete sampled evaluation; step-100 paid-factor frontier passed, late-step gradient-only route rejected | Actual-byte global selector over causal/asymmetric bases, paid basis innovations/current SVD factors, and sparse/bulk residuals at 0.32 bpv | `G0` | `experiments/G1/algorithm.py` | `experiments/G1/README.md` |
+| `G1P` | complete; same-host procedural gate and endpoint passed | Initial model plus explicit minibatch transcript; gradients regenerated through external dataset and training compute at 0.03258 bpv | `G1` pivot/control | `experiments/G1P/algorithm.py` | `experiments/G1P/README.md` |
 | `C1` | planned control | Numcodecs `BitRound`/`Quantize`, tuned to the same energy-R2 gate | `D1` comparison control | — | — |
 
 Read the listed writeups before extending an entry. New IDs are append-only;

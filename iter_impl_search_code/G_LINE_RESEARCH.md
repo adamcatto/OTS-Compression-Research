@@ -408,13 +408,30 @@ The G0 TT and Kronecker measurements remained comparison controls rather than
 being promoted into byte codecs because their energy capture was substantially
 below even the rejected G1 frontier.
 
-### G1P — procedural side-information control
+### G1P — procedural side-information control (complete; same-host pass)
 
-Measure bytes for batch indices, labels if not dataset-derived, RNG state,
-initial state/hash, environment/code identifiers, and keyframes. Verify whether
-the exact gradients can be regenerated on the same host and quantify one-step
-and short-prefix runtime. Report this separately because the decoder has the
-dataset and performs training compute.
+G1P stores the initial model, an explicit 16,000-index minibatch schedule,
+decoder source, hashes, and numerical contract in an actual 19,835,448-byte
+stream. Across 1,000 steps this is `0.0325812` bits per gradient value, or
+`982.161x` versus FP32 gradients. Labels are derived from the external WikiText
+tokens and dropout is zero, so neither labels nor per-step RNG require payload.
+
+Sequential same-host MPS replay clears the sampled gradient gate at steps 0,
+1, 100, 500, and 999. Minimum R2 is `0.999999999983788`; step-999 relative L2
+is `4.03e-6`. The replay is not bit-exact. Its final weights have cosine
+`0.999999999910465` and relative L2 `1.338e-5`; 131,072 held-out predictions
+have 100% top-1 agreement and reference-to-replay KL `1.648e-12`.
+
+An actual model+Adam+scheduler recovery keyframe costs 58,795,833 bytes, so
+only two additional keyframes fit under the aggregate 0.32-bpv budget. The
+result therefore passes as a sequential procedural transcript on a matching
+runtime, not as a standalone or portable gradient codec. See
+`experiments/G1P/README.md`, `results.csv`, and `final_model_outputs.csv`.
+
+The next useful control is G1PD: change runtime/device, measure numerical
+desynchronization, and code only the corrections needed to restore R2 0.99
+under the remaining rate. This does not reopen the rejected gradient-only G2
+branch.
 
 ### G2 — shared factor/residual hyperdecoder (conditional)
 

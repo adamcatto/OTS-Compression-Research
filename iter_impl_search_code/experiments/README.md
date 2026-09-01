@@ -36,9 +36,13 @@ for comparing algorithms.
 | F1 | +1.098e-3 | 2.21720750 | 8.784e-4 | 2.884e-4 | 99.7032% | 28.2482% |
 | F2 | +1.110e-3 | 2.21723712 | 9.080e-4 | 2.982e-4 | 99.6552% | 28.4749% |
 | F2R | +1.043e-3 | 2.21719157 | 8.624e-4 | 2.834e-4 | 99.7002% | 27.8086% |
+| G1P | -5.247e-9 | 2.21632914 | 1.648e-12 | 4.120e-13 | 100.0000% | 0.0000436% |
 
 The raw teacher-to-lossy cross-entropy changes little because most of it is the
-teacher's entropy. D3 is the closest output distribution in this comparison;
+teacher's entropy. G1P is the closest output distribution, but it is a
+procedural side-information control that reruns training against the external
+dataset rather than a standalone gradient codec. Among the self-contained
+gradient codecs, D3 is the closest output distribution;
 F2 is the most divergent despite its two strict global error gates. Rate-matched
 F2R recovers a modest portion of F1/F2's drift, showing that placement matters
 but the block-scalar Adam proxy is not sufficient by itself.
