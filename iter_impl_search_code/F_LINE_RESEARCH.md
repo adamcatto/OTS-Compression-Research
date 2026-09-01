@@ -391,11 +391,16 @@ weights evolve continuously.
   int8, validating outlier flattening, but final-weight relative L2 reached
   6.96% and output KL reached `8.78e-4`. The standalone endpoint hypothesis is
   rejected.
-- **F2:** optimizer-aware global rate-distortion allocation. Maintain one
-  decoder-synchronized RMS/sensitivity statistic per large block, construct a
-  frontier including F1 and FP16 candidates, and allocate bits under both raw
-  R2 and preconditioned-update error. Keep the F1 fidelity target initially;
-  do not loosen to 0.995 until endpoint behavior improves.
+- **F2 (complete):** optimizer-aware global rate-distortion allocation. It
+  reached 3.993x and 0.999916 gradient R2, but the weighted constraint remained
+  slack (mean proxy relative SSE `8.82e-5` under a `1e-4` limit), leaving only
+  82,176 FP16 values in 4.8704B. Final-weight relative L2 was 7.01% and output
+  KL was `9.08e-4`, both slightly worse than F1. Rate won; endpoint fidelity
+  and the chosen sensitivity-budget calibration were rejected.
+- **F2R:** rate-matched sensitivity allocation. Carry a byte reservoir across
+  steps and adapt the weighted budget to spend approximately F1's byte rate,
+  so endpoint differences test *where* precision is allocated rather than how
+  much total error was added. Keep the raw `1e-4` bound.
 - **F3:** decoder-synchronized rank-k tensor subspaces with no per-step full
   factors; compare fixed cadence with innovation-triggered refresh and feed its
   core/residual candidates into F2's allocator.
@@ -409,6 +414,15 @@ is 2.43x D5's. A global scalar bias correction is therefore unlikely to be
 enough. The discrepancy points to coordinate/tensor-dependent Adam sensitivity,
 which is why F2 moves optimizer-aware distortion ahead of a looser global R2
 budget or a larger structural model.
+
+The sequence changed again after F2. Its global allocator exposed how
+conservative F1's independent block gates were, but the identically valued raw
+and weighted budgets were not comparably tight: transformed int8 usually met
+both, so the optimizer proxy selected almost no extra precision. F2R must
+rate-match F1 before F3; otherwise a comparison would confound sensitivity
+placement with F2's 13.7% byte reduction and 20.3% larger raw error. If F2R
+fails, the block-scalar proxy has earned rejection and the subspace/error-debt
+stages become the next evidence-based move.
 
 ## Selected primary references
 
