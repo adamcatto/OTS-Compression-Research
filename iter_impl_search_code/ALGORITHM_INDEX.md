@@ -8,7 +8,7 @@
 | `D3` | complete; rate hypothesis rejected | Zero-predictor DeltaQ ablation using the same adaptive int8/FP16/FP32 quantizer | `D2` | `compression/algorithms/ots_deltaq.py` | `results/D3_zero_predictor.md` |
 | `D4` | complete; marginal rate gain, compute tradeoff rejected | Per-block adaptive selector between zero and previous-decoded prediction | `D3` | `compression/algorithms/ots_deltaq.py` | `results/D4_adaptive_predictor.md` |
 | `D5` | complete; rate win, strict weight agreement rejected | Robust int8 residuals with sparse FP16 outlier exceptions | `D4` | `compression/algorithms/ots_deltaq.py` | `results/D5_sparse_outliers.md` |
-| `E1` | planned new direction | Measured within-tensor and short-horizon temporal structure | structural branch from `D2`/`D5` findings | — | — |
+| `E1` | complete; modest rate win, intermediate endpoint drift | Per-matrix learned rank-1 predictor with FP16 factors and strict DeltaQ residual fallback | structural branch from `D2`/`D5` findings | `compression/algorithms/ots_deltaq.py`, `implementation_search/structure_analysis.py` | `results/E1_rank1_structure.md` |
 | `C1` | planned control | Numcodecs `BitRound`/`Quantize`, tuned to the same energy-R2 gate | `D1` comparison control | — | — |
 
 Read the listed writeups before extending an entry. New IDs are append-only;
