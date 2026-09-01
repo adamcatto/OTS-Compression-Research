@@ -1,0 +1,2 @@
+step,source_tensor_bytes,encoded_bytes,compression_ratio,compression_latency_ms,compression_throughput_mib_per_second,encoded_bits_per_gradient_element,prediction_energy_r2,prediction_cosine_similarity,reconstruction_energy_r2
+aggregate_legacy,19481600,9630192.199,2.02399,88.62,209.649081,,,,0.9999952482

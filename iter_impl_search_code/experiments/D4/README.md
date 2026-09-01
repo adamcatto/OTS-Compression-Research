@@ -1,5 +1,7 @@
 # D4 — adaptive per-block predictor selection
 
+The exact runnable construction and result table are colocated in this bundle.
+
 ## Hypothesis
 
 A per-block selector between zero and previous-decoded prediction will retain

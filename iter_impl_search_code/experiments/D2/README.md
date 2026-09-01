@@ -1,5 +1,7 @@
 # D2 — training-time online DeltaQ with saved predictions
 
+The exact runnable construction and per-step result table are colocated here.
+
 ## Hypothesis
 
 D1's causal result should reproduce when compression is performed synchronously

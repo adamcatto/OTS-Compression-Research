@@ -1,5 +1,7 @@
 # D3 — zero-predictor DeltaQ ablation
 
+The exact runnable construction and result table are colocated in this bundle.
+
 ## Hypothesis
 
 Replacing D2's previous-decoded-gradient predictor with zero will shrink the

@@ -1,5 +1,7 @@
 # D5 — sparse outlier-aware residual quantization
 
+The exact runnable construction and result table are colocated in this bundle.
+
 ## Hypothesis
 
 The max residual in a block is forcing otherwise quantizable values into FP16.

@@ -3,5 +3,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 experiments/
+!iter_impl_search_code/experiments/
+!iter_impl_search_code/experiments/**
+iter_impl_search_code/experiments/**/__pycache__/
+iter_impl_search_code/experiments/**/*.py[cod]
 data/
 *.otsg

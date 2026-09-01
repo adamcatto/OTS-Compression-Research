@@ -1,5 +1,7 @@
 # D1 — OTS-DeltaQ v1
 
+The exact runnable construction and result table are colocated in this bundle.
+
 ## Hypothesis
 
 Per-block numeric approximation can reduce a FP32 gradient trace by about 4x

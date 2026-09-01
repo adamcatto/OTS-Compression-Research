@@ -17,7 +17,9 @@ writeup names the reason (replication, a corrected bug, or a changed metric).
 4. Measure compressed size, encode/decode cost, gradient energy-R2, cosine
    similarity, replayed optimizer trajectory, final-weight difference, and
    fixed-probe loss curve when their required artifacts exist.
-5. Append a short immutable writeup and add/update the index.
+5. Store the experiment's writeup, runnable algorithm definition, aggregate
+   result, and per-step result table together under `experiments/<ID>/`, then
+   add/update the index.
 6. Let the measured failure mode choose the next change. A departure from the
    lineage is allowed only when the writeup explains why the old line is not
    promising.
@@ -35,3 +37,21 @@ fixed-probe loss are the deciding measurements.
 `<experiment>/lossless/` holds exact codec controls. `<experiment>/lossy/`
 holds lossy candidates and off-the-shelf controls. Old `baselines/` directories
 are legacy results and are not copied merely to change names.
+
+## Git experiment bundle
+
+Every implemented algorithm has one self-contained directory:
+
+```text
+experiments/<ID>/
+  README.md       hypothesis, method, aggregate result, and interpretation
+  algorithm.py    exact runnable algorithm construction used for the run
+  results.csv     one row per training step
+```
+
+`results.csv` stores at least the step number, uncompressed and compressed
+bytes, compression ratio, online compression latency, and compression
+throughput. Prediction and reconstruction metrics are included when available.
+Large tensors, compressed artifacts, model weights, and loss curves remain on
+the external experiment drive. A legacy run whose per-step latency was not
+recorded is marked unavailable rather than rerun only to populate the table.

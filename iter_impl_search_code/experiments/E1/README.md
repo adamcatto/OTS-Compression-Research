@@ -1,5 +1,7 @@
 # E1 — learned rank-1 tensor structure
 
+The exact runnable construction and result table are colocated in this bundle.
+
 ## Hypothesis
 
 Large weight-gradient matrices contain a coherent low-rank component that is

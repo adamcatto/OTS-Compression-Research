@@ -1,5 +1,7 @@
 # L0 — lossless controls
 
+The exact runnable constructions and result table are colocated in this bundle.
+
 Experiment `experiment_001` is a 1,000-step WikiText-2 causal Transformer
 trace (19,491,431,115 bytes). All ten codec/mode results round-tripped exactly.
 
