@@ -169,6 +169,56 @@ def test_runner_records_every_optimizer_step(tmp_path: Path) -> None:
     assert len((online / "prediction_metrics.jsonl").read_text().splitlines()) == 3
 
 
+def test_runner_supports_f2_as_true_training_time_online_codec(
+    tmp_path: Path,
+) -> None:
+    spec = ExperimentSpec(
+        domain="test",
+        task="test.regression",
+        dataset={"name": "unit-test-fixture"},
+        model={"architecture": "linear"},
+        optimizer={"name": "adamw", "lr": 0.01, "betas": [0.9, 0.95]},
+        training={
+            "steps": 2,
+            "batch_size": 2,
+            "device": "cpu",
+            "precision": "fp32",
+            "online_compression": {
+                "algorithm": "ots_rht_adam_allocator_f2",
+                "block_size": 4,
+                "relative_squared_error": 1e-4,
+                "preconditioned_relative_squared_error": 1e-4,
+                "save_predictions": True,
+            },
+        },
+        seed=19,
+    )
+    settings = Settings(
+        experiments_dir=tmp_path / "experiments",
+        datasets_dir=tmp_path / "datasets",
+    )
+
+    result = run_training(spec, _RunnerFixtureTask(), settings=settings)
+    online = (
+        result.experiment.path
+        / "lossy"
+        / "ots_rht_adam_allocator_f2"
+        / "online"
+    )
+    rows = [
+        json.loads(line)
+        for line in (online / "prediction_metrics.jsonl").read_text().splitlines()
+    ]
+
+    assert (online / "compressed.otsdq").is_file()
+    assert len(rows) == 2
+    assert all(row["allocator_block_count"] == 2 for row in rows)
+    assert all(
+        row["optimizer_proxy_relative_squared_error"] <= 1.000001e-4
+        for row in rows
+    )
+
+
 def test_capture_hook_can_record_before_or_after_gradient_clipping(
     tmp_path: Path,
 ) -> None:

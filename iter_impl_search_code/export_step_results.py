@@ -19,6 +19,14 @@ FIELDS = (
     "prediction_energy_r2",
     "prediction_cosine_similarity",
     "reconstruction_energy_r2",
+    "allocator_raw_relative_squared_error",
+    "optimizer_proxy_relative_squared_error",
+    "allocator_dual_iterations",
+    "allocator_local_downgrades",
+    "allocator_selected_payload_bytes",
+    "allocator_block_count",
+    "sensitivity_weight_min",
+    "sensitivity_weight_max",
 )
 
 

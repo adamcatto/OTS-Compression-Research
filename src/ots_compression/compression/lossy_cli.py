@@ -19,6 +19,17 @@ def main() -> int:
     parser.add_argument("--rank1-power-iterations", type=int, default=1)
     parser.add_argument("--rank1-warm-start", action="store_true")
     parser.add_argument(
+        "--allocation",
+        choices=["per_block", "optimizer_aware_global"],
+        default="per_block",
+    )
+    parser.add_argument(
+        "--preconditioned-relative-squared-error", type=float, default=1e-4
+    )
+    parser.add_argument("--sensitivity-beta2", type=float, default=0.999)
+    parser.add_argument("--sensitivity-epsilon", type=float, default=1e-8)
+    parser.add_argument("--allocator-iterations", type=int, default=40)
+    parser.add_argument(
         "--block-transform",
         choices=["none", "randomized_hadamard"],
         default="none",
@@ -57,6 +68,13 @@ def main() -> int:
         rank1_power_iterations=args.rank1_power_iterations,
         rank1_warm_start=args.rank1_warm_start,
         block_transform=args.block_transform,
+        allocation=args.allocation,
+        preconditioned_relative_squared_error=(
+            args.preconditioned_relative_squared_error
+        ),
+        sensitivity_beta2=args.sensitivity_beta2,
+        sensitivity_epsilon=args.sensitivity_epsilon,
+        allocator_iterations=args.allocator_iterations,
     )
     mode = (
         "online"

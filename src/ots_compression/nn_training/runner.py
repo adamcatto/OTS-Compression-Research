@@ -266,6 +266,8 @@ def run_training(
                 "ots_deltaq_outlier_v1",
                 "ots_rank1_deltaq_e1",
                 "ots_rank1_tracking_e2",
+                "ots_rht_deltaq_f1",
+                "ots_rht_adam_allocator_f2",
             }:
                 raise ValueError(f"unsupported online compression algorithm: {algorithm}")
             save_predictions = bool(online_values.pop("save_predictions", True))
@@ -276,7 +278,12 @@ def run_training(
                 ),
                 prediction=(
                     "zero"
-                    if algorithm == "ots_deltaq_zero_v1"
+                    if algorithm
+                    in {
+                        "ots_deltaq_zero_v1",
+                        "ots_rht_deltaq_f1",
+                        "ots_rht_adam_allocator_f2",
+                    }
                     else (
                         "adaptive_zero_previous"
                         if algorithm == "ots_deltaq_adaptive_predictor_v1"
@@ -299,6 +306,37 @@ def run_training(
                         "outlier_fraction",
                         0.01 if algorithm == "ots_deltaq_outlier_v1" else 0.0,
                     )
+                ),
+                block_transform=(
+                    "randomized_hadamard"
+                    if algorithm
+                    in {"ots_rht_deltaq_f1", "ots_rht_adam_allocator_f2"}
+                    else "none"
+                ),
+                allocation=(
+                    "optimizer_aware_global"
+                    if algorithm == "ots_rht_adam_allocator_f2"
+                    else "per_block"
+                ),
+                preconditioned_relative_squared_error=float(
+                    online_values.pop(
+                        "preconditioned_relative_squared_error", 1e-4
+                    )
+                ),
+                sensitivity_beta2=float(
+                    online_values.pop(
+                        "sensitivity_beta2",
+                        spec.optimizer.get("betas", [0.9, 0.999])[1],
+                    )
+                ),
+                sensitivity_epsilon=float(
+                    online_values.pop(
+                        "sensitivity_epsilon",
+                        spec.optimizer.get("eps", 1e-8),
+                    )
+                ),
+                allocator_iterations=int(
+                    online_values.pop("allocator_iterations", 40)
                 ),
             )
             if online_values:

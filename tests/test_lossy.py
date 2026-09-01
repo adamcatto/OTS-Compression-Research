@@ -279,3 +279,55 @@ def test_f1_randomized_hadamard_round_trips_and_flattens_outlier(
 def test_f1_rejects_unknown_block_transform() -> None:
     with pytest.raises(ValueError, match="block_transform"):
         OTSDeltaQCompressor(block_transform="dense_random_rotation")
+
+
+def test_f2_optimizer_aware_global_allocator_round_trips_online(
+    tmp_path: Path,
+) -> None:
+    block_size = 256
+    compressor = OTSDeltaQCompressor(
+        block_size=block_size,
+        relative_squared_error=1e-4,
+        prediction="zero",
+        block_transform="randomized_hadamard",
+        allocation="optimizer_aware_global",
+        preconditioned_relative_squared_error=1e-4,
+        allocator_iterations=60,
+    )
+    source = tmp_path / "f2.otsg"
+    generator = torch.Generator().manual_seed(22)
+    with GradientTraceWriter(source, experiment_id="f2-unit") as writer:
+        for step in range(3):
+            first = torch.randn(block_size, generator=generator) * 1e-3
+            second = torch.randn(block_size, generator=generator)
+            writer.append(step, {"weight": torch.cat((first, second))})
+
+    metrics = benchmark_deltaq(source, compressor, tmp_path / compressor.name)
+    per_step = [
+        json.loads(line)
+        for line in (
+            tmp_path / compressor.name / "prediction_metrics.jsonl"
+        ).read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert compressor.name == "ots_rht_adam_allocator_f2"
+    assert compressor.configuration()["allocation"] == "optimizer_aware_global"
+    assert metrics.gradient_energy_r2 >= 0.999899
+    assert metrics.codec_stats["steps"] == 3
+    assert all(
+        row["allocator_raw_relative_squared_error"] <= 1.000001e-4
+        for row in per_step
+    )
+    assert all(
+        row["optimizer_proxy_relative_squared_error"] <= 1.000001e-4
+        for row in per_step
+    )
+    assert all(row["allocator_block_count"] == 2 for row in per_step)
+    assert per_step[1]["sensitivity_weight_max"] > per_step[1]["sensitivity_weight_min"]
+
+
+def test_f2_requires_the_isolated_f1_representation() -> None:
+    with pytest.raises(ValueError, match="optimizer_aware_global"):
+        OTSDeltaQCompressor(allocation="optimizer_aware_global")
+    with pytest.raises(ValueError, match="preconditioned_relative_squared_error"):
+        OTSDeltaQCompressor(preconditioned_relative_squared_error=1.0)

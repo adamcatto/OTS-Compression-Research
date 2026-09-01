@@ -105,7 +105,9 @@
                 "ots_deltaq_adaptive_predictor_v1",
                 "ots_deltaq_outlier_v1",
                 "ots_rank1_deltaq_e1",
-                "ots_rank1_tracking_e2"
+                "ots_rank1_tracking_e2",
+                "ots_rht_deltaq_f1",
+                "ots_rht_adam_allocator_f2"
               ]
             },
             "block_size": {
@@ -131,6 +133,23 @@
             },
             "rank1_warm_start": {
               "type": "boolean"
+            },
+            "preconditioned_relative_squared_error": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "sensitivity_beta2": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "sensitivity_epsilon": {
+              "$ref": "common.schema.json#/$defs/positiveNumber"
+            },
+            "allocator_iterations": {
+              "type": "integer",
+              "minimum": 1
             }
           }
         }
