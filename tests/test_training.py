@@ -127,6 +127,12 @@ def test_runner_records_every_optimizer_step(tmp_path: Path) -> None:
             "batch_size": 2,
             "device": "cpu",
             "precision": "fp32",
+            "online_compression": {
+                "algorithm": "ots_deltaq_v1",
+                "block_size": 16,
+                "relative_squared_error": 1e-4,
+                "save_predictions": True,
+            },
         },
         seed=11,
     )
@@ -151,6 +157,16 @@ def test_runner_records_every_optimizer_step(tmp_path: Path) -> None:
     ] == "optimizer_input"
     assert (result.experiment.path / "training_metrics.jsonl").is_file()
     assert (result.experiment.path / "training_summary.json").is_file()
+    assert (result.experiment.path / "initial_model.pt").is_file()
+    assert (result.experiment.path / "final_model.pt").is_file()
+    contract = json.loads((result.experiment.path / "replay_contract.json").read_text())
+    assert contract["gradient_capture"] == "optimizer_input"
+    assert contract["initial_model"]["sha256"]
+    assert contract["final_model"]["sha256"]
+    online = result.experiment.path / "lossy" / "ots_deltaq_v1" / "online"
+    assert (online / "compressed.otsdq").is_file()
+    assert (online / "predictions.otsg").is_file()
+    assert len((online / "prediction_metrics.jsonl").read_text().splitlines()) == 3
 
 
 def test_capture_hook_can_record_before_or_after_gradient_clipping(

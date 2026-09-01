@@ -9,6 +9,7 @@ from .baselines import (
     available_baselines,
     baseline_registry,
 )
+from .ots_deltaq import OTSDeltaQCompressor
 
 __all__ = [
     "DeflateCompressor",
@@ -18,5 +19,5 @@ __all__ = [
     "ZstdCompressor",
     "available_baselines",
     "baseline_registry",
+    "OTSDeltaQCompressor",
 ]
-

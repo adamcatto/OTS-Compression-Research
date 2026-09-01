@@ -31,6 +31,8 @@ test = ["pytest>=7"]
 
 [project.scripts]
 ots-baselines = "ots_compression.compression.cli:main"
+ots-lossy = "ots_compression.compression.lossy_cli:main"
+ots-replay = "ots_compression.nn_training.replay_cli:main"
 ots-train = "ots_compression.nn_training.cli:main"
 
 [tool.setuptools.packages.find]

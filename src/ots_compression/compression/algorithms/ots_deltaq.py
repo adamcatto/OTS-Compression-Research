@@ -1,0 +1,538 @@
+"""OTS-DeltaQ, an online decoder-consistent lossy gradient codec.
+
+The first implementation prioritizes a falsifiable fidelity guarantee over an
+aggressive learned model: each tensor is predicted from its previously decoded
+value, then each residual block uses int8 only when its reconstruction error
+fits a configured relative squared-error budget.  Otherwise it falls back to
+float16 or float32.  The decoder updates exactly the same predictor.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import statistics
+import struct
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional, Tuple
+
+import torch
+
+from ...core.gradient_trace import GradientStep, GradientTraceReader, GradientTraceWriter
+
+
+_MAGIC = b"OTSDQ001"
+_VERSION = 1
+_FILE_HEADER = struct.Struct("<8sHI")
+_RECORD_HEADER = struct.Struct("<4sQIQ")
+_RECORD_MAGIC = b"STEP"
+_BLOCK_HEADER = struct.Struct("<Bf")
+_INT8, _FLOAT16, _FLOAT32 = range(3)
+
+
+@dataclass(frozen=True)
+class DeltaQStats:
+    steps: int
+    tensors: int
+    int8_blocks: int
+    float16_blocks: int
+    float32_blocks: int
+
+    def to_dict(self) -> dict:
+        return {
+            "steps": self.steps,
+            "tensors": self.tensors,
+            "int8_blocks": self.int8_blocks,
+            "float16_blocks": self.float16_blocks,
+            "float32_blocks": self.float32_blocks,
+        }
+
+
+class OTSDeltaQOnlineWriter:
+    """Append one encoded record immediately after each captured gradient step."""
+
+    def __init__(
+        self,
+        compressor: "OTSDeltaQCompressor",
+        artifact_path: Path,
+        *,
+        source_metadata: Mapping[str, Any],
+        predictions_path: Optional[Path] = None,
+        prediction_metrics_path: Optional[Path] = None,
+        summary_path: Optional[Path] = None,
+        durable: bool = False,
+    ) -> None:
+        self.compressor = compressor
+        self.artifact_path = Path(artifact_path)
+        self.artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        self.temporary_path = self.artifact_path.with_suffix(
+            self.artifact_path.suffix + ".tmp"
+        )
+        self._stream = self.temporary_path.open("wb")
+        self._durable = durable
+        self._predictors: Dict[str, torch.Tensor] = {}
+        self._last_step: Optional[int] = None
+        self._started = time.perf_counter()
+        self._counters = {
+            "steps": 0,
+            "tensors": 0,
+            "int8_blocks": 0,
+            "float16_blocks": 0,
+            "float32_blocks": 0,
+        }
+        self._summary_path = Path(summary_path) if summary_path else None
+        self._prediction_metrics_path = (
+            Path(prediction_metrics_path) if prediction_metrics_path else None
+        )
+        self._prediction_metrics_stream = None
+        if self._prediction_metrics_path is not None:
+            self._prediction_metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            self._prediction_metrics_stream = self._prediction_metrics_path.open(
+                "w", encoding="utf-8"
+            )
+        self._prediction_writer = None
+        if predictions_path is not None:
+            extra_metadata = {
+                "gradient_capture": source_metadata.get("gradient_capture"),
+                "kind": "deltaq_decoder_predictions",
+                "algorithm": compressor.name,
+            }
+            self._prediction_writer = GradientTraceWriter(
+                Path(predictions_path),
+                experiment_id=str(source_metadata["experiment_id"]),
+                durable=durable,
+                metadata={key: value for key, value in extra_metadata.items() if value is not None},
+            )
+        header = {
+            "format": "ots-deltaq",
+            "version": _VERSION,
+            "access_mode": "online",
+            "source_metadata": dict(source_metadata),
+            "configuration": compressor.configuration(),
+        }
+        encoded_header = _canonical_json(header)
+        self._stream.write(_FILE_HEADER.pack(_MAGIC, _VERSION, len(encoded_header)))
+        self._stream.write(encoded_header)
+        self._commit()
+
+    def append(
+        self, step: int, gradients: Mapping[str, Optional[torch.Tensor]]
+    ) -> None:
+        if self._stream.closed:
+            raise ValueError("cannot append to a closed OTS-DeltaQ writer")
+        if step < 0 or (self._last_step is not None and step <= self._last_step):
+            raise ValueError("steps must be nonnegative and strictly increasing")
+        started = time.perf_counter()
+        predictions = self._predictions_for(gradients)
+        before = dict(self._counters)
+        metadata, payload, decoded = self.compressor._encode_step(
+            GradientStep(step=step, gradients=gradients),
+            self._predictors,
+            self._counters,
+        )
+        fixed = _RECORD_HEADER.pack(
+            _RECORD_MAGIC, step, len(metadata), len(payload)
+        )
+        self._stream.write(fixed)
+        self._stream.write(metadata)
+        self._stream.write(payload)
+        self._commit()
+        codec_seconds = time.perf_counter() - started
+        if self._prediction_writer is not None:
+            self._prediction_writer.append(step, predictions)
+        if self._prediction_metrics_stream is not None:
+            metric = _step_metrics(
+                step,
+                gradients,
+                predictions,
+                decoded,
+                encoded_bytes=len(fixed) + len(metadata) + len(payload),
+                block_counts={
+                    key: self._counters[key] - before[key]
+                    for key in ("int8_blocks", "float16_blocks", "float32_blocks")
+                },
+                encode_seconds=codec_seconds,
+            )
+            self._prediction_metrics_stream.write(
+                json.dumps(metric, sort_keys=True) + "\n"
+            )
+            self._prediction_metrics_stream.flush()
+        self._predictors.update(decoded)
+        self._counters["steps"] += 1
+        self._last_step = step
+
+    def _predictions_for(
+        self, gradients: Mapping[str, Optional[torch.Tensor]]
+    ) -> Dict[str, Optional[torch.Tensor]]:
+        predictions: Dict[str, Optional[torch.Tensor]] = {}
+        for name, tensor in gradients.items():
+            if tensor is None:
+                predictions[name] = None
+                continue
+            value = tensor.detach().to(dtype=torch.float32, device="cpu").contiguous()
+            prediction = self._predictors.get(name)
+            if prediction is None or prediction.shape != value.shape:
+                prediction = torch.zeros_like(value)
+            predictions[name] = prediction
+        return predictions
+
+    def _commit(self) -> None:
+        self._stream.flush()
+        if self._durable:
+            import os
+
+            os.fsync(self._stream.fileno())
+
+    def close(self, *, commit: bool = True) -> DeltaQStats:
+        if self._stream.closed:
+            return DeltaQStats(**self._counters)
+        self._stream.close()
+        if self._prediction_writer is not None:
+            self._prediction_writer.close()
+        if self._prediction_metrics_stream is not None:
+            self._prediction_metrics_stream.close()
+        if commit:
+            self.temporary_path.replace(self.artifact_path)
+            if self._summary_path is not None:
+                summary = {
+                    "access_mode": "online",
+                    "algorithm": self.compressor.name,
+                    "artifact": str(self.artifact_path),
+                    "compressed_bytes": self.artifact_path.stat().st_size,
+                    "configuration": self.compressor.configuration(),
+                    "encode_wall_seconds": time.perf_counter() - self._started,
+                    **self._counters,
+                }
+                if self._prediction_metrics_path is not None:
+                    summary["prediction_metrics"] = summarize_prediction_metrics(
+                        self._prediction_metrics_path
+                    )
+                self._summary_path.parent.mkdir(parents=True, exist_ok=True)
+                self._summary_path.write_text(
+                    json.dumps(summary, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+        return DeltaQStats(**self._counters)
+
+    def __enter__(self) -> "OTSDeltaQOnlineWriter":
+        return self
+
+    def __exit__(self, exc_type, *_: Any) -> None:
+        self.close(commit=exc_type is None)
+
+
+class OTSDeltaQCompressor:
+    """Blockwise temporal residual codec suitable for sharded online use.
+
+    ``relative_squared_error`` is checked independently for every block against
+    the original gradient block.  Therefore the complete decoded trace obeys
+    the same uncentered relative squared-error bound (up to floating arithmetic).
+    """
+
+    name = "ots_deltaq_v1"
+
+    def __init__(self, *, block_size: int = 16_384, relative_squared_error: float = 1e-4):
+        if block_size <= 0:
+            raise ValueError("block_size must be positive")
+        if not 0 < relative_squared_error < 1:
+            raise ValueError("relative_squared_error must be in (0, 1)")
+        self.block_size = block_size
+        self.relative_squared_error = relative_squared_error
+
+    def configuration(self) -> dict:
+        return {
+            "block_size": self.block_size,
+            "relative_squared_error": self.relative_squared_error,
+            "prediction": "previous_decoded_gradient",
+            "int8_rounding": "nearest",
+            "fallbacks": ["float16", "float32"],
+        }
+
+    def open_online(
+        self,
+        artifact_path: Path,
+        *,
+        source_metadata: Mapping[str, Any],
+        predictions_path: Optional[Path] = None,
+        prediction_metrics_path: Optional[Path] = None,
+        summary_path: Optional[Path] = None,
+        durable: bool = False,
+    ) -> OTSDeltaQOnlineWriter:
+        return OTSDeltaQOnlineWriter(
+            self,
+            artifact_path,
+            source_metadata=source_metadata,
+            predictions_path=predictions_path,
+            prediction_metrics_path=prediction_metrics_path,
+            summary_path=summary_path,
+            durable=durable,
+        )
+
+    def compress(self, trace_path: Path, artifact_path: Path) -> DeltaQStats:
+        trace_path, artifact_path = Path(trace_path), Path(artifact_path)
+        reader = GradientTraceReader(trace_path)
+        with self.open_online(
+            artifact_path,
+            source_metadata=reader.metadata,
+        ) as writer:
+            for record in reader.steps():
+                writer.append(record.step, record.gradients)
+        return DeltaQStats(**writer._counters)
+
+    def decompress(self, artifact_path: Path, trace_path: Path) -> None:
+        artifact_path, trace_path = Path(artifact_path), Path(trace_path)
+        predictors: Dict[str, torch.Tensor] = {}
+        with artifact_path.open("rb") as stream:
+            header = _read_header(stream)
+            source_metadata = header["source_metadata"]
+            with GradientTraceWriter(trace_path, experiment_id=str(source_metadata["experiment_id"]), metadata={key: value for key, value in source_metadata.items() if key not in {"experiment_id", "format"}}) as writer:
+                previous = -1
+                while True:
+                    fixed = stream.read(_RECORD_HEADER.size)
+                    if not fixed:
+                        return
+                    if len(fixed) != _RECORD_HEADER.size:
+                        raise ValueError("truncated OTS-DeltaQ record header")
+                    magic, step, metadata_size, payload_size = _RECORD_HEADER.unpack(fixed)
+                    if magic != _RECORD_MAGIC or step <= previous:
+                        raise ValueError("invalid OTS-DeltaQ record")
+                    metadata = json.loads(_read_exact(stream, metadata_size, "record metadata"))
+                    payload = _read_exact(stream, payload_size, "record payload")
+                    gradients, decoded = self._decode_step(metadata, payload, predictors)
+                    writer.append(step, gradients)
+                    predictors.update(decoded)
+                    previous = step
+
+    def _encode_step(self, record: GradientStep, predictors: Mapping[str, torch.Tensor], counters: dict) -> Tuple[bytes, bytes, Dict[str, torch.Tensor]]:
+        descriptors, payload_parts, decoded = [], [], {}
+        offset = 0
+        for name, tensor in record.gradients.items():
+            if tensor is None:
+                descriptors.append({"name": name, "present": False})
+                continue
+            value = tensor.detach().to(dtype=torch.float32, device="cpu").contiguous()
+            prediction = predictors.get(name)
+            if prediction is None or prediction.shape != value.shape:
+                prediction = torch.zeros_like(value)
+            encoded, reconstruction, block_counts = self._encode_tensor(value, prediction)
+            counters["tensors"] += 1
+            for key, amount in block_counts.items():
+                counters[key] += amount
+            descriptors.append({"name": name, "present": True, "dtype": str(tensor.dtype).removeprefix("torch."), "shape": list(tensor.shape), "offset": offset, "nbytes": len(encoded)})
+            payload_parts.append(encoded)
+            offset += len(encoded)
+            decoded[name] = reconstruction.reshape(value.shape)
+        return _canonical_json({"tensors": descriptors}), b"".join(payload_parts), decoded
+
+    def _decode_step(self, metadata: Mapping[str, object], payload: bytes, predictors: Mapping[str, torch.Tensor]) -> Tuple[Dict[str, Optional[torch.Tensor]], Dict[str, torch.Tensor]]:
+        gradients: Dict[str, Optional[torch.Tensor]] = {}
+        decoded: Dict[str, torch.Tensor] = {}
+        for descriptor in metadata["tensors"]:  # type: ignore[index]
+            name = descriptor["name"]  # type: ignore[index]
+            if not descriptor.get("present", False):  # type: ignore[union-attr]
+                gradients[name] = None
+                continue
+            shape = tuple(descriptor["shape"])  # type: ignore[index]
+            prediction = predictors.get(name)
+            if prediction is None or tuple(prediction.shape) != shape:
+                prediction = torch.zeros(shape, dtype=torch.float32)
+            offset, nbytes = int(descriptor["offset"]), int(descriptor["nbytes"])
+            reconstructed = self._decode_tensor(payload[offset : offset + nbytes], prediction)
+            dtype = getattr(torch, str(descriptor["dtype"]))
+            gradients[name] = reconstructed.to(dtype=dtype).reshape(shape)
+            decoded[name] = reconstructed.reshape(shape)
+        return gradients, decoded
+
+    def _encode_tensor(self, value: torch.Tensor, prediction: torch.Tensor) -> Tuple[bytes, torch.Tensor, dict]:
+        source, previous = value.reshape(-1), prediction.reshape(-1)
+        output = io.BytesIO()
+        reconstruction = torch.empty_like(source)
+        counts = {"int8_blocks": 0, "float16_blocks": 0, "float32_blocks": 0}
+        for offset in range(0, source.numel(), self.block_size):
+            current = source[offset : offset + self.block_size]
+            predicted = previous[offset : offset + self.block_size]
+            residual = current - predicted
+            mode, scale, encoded, restored = self._encode_block(current, residual)
+            output.write(_BLOCK_HEADER.pack(mode, scale))
+            output.write(encoded)
+            reconstruction[offset : offset + current.numel()] = predicted + restored
+            counts[{_INT8: "int8_blocks", _FLOAT16: "float16_blocks", _FLOAT32: "float32_blocks"}[mode]] += 1
+        return output.getvalue(), reconstruction, counts
+
+    def _encode_block(self, value: torch.Tensor, residual: torch.Tensor) -> Tuple[int, float, bytes, torch.Tensor]:
+        energy = float(torch.sum(value.square(), dtype=torch.float64))
+        maximum = float(residual.abs().max()) if residual.numel() else 0.0
+        scale = maximum / 127.0 if maximum else 1.0
+        quantized = torch.round(residual / scale).clamp(-127, 127).to(torch.int8)
+        restored = quantized.to(torch.float32) * scale
+        if _within_budget(value, residual - restored, energy, self.relative_squared_error):
+            return _INT8, scale, quantized.numpy().tobytes(), restored
+        half = residual.to(torch.float16)
+        restored = half.to(torch.float32)
+        if _within_budget(value, residual - restored, energy, self.relative_squared_error):
+            return _FLOAT16, 1.0, half.numpy().tobytes(), restored
+        return _FLOAT32, 1.0, residual.numpy().tobytes(), residual
+
+    def _decode_tensor(self, payload: bytes, prediction: torch.Tensor) -> torch.Tensor:
+        source = prediction.reshape(-1)
+        output = torch.empty_like(source)
+        cursor = 0
+        for offset in range(0, source.numel(), self.block_size):
+            count = min(self.block_size, source.numel() - offset)
+            mode, scale = _BLOCK_HEADER.unpack_from(payload, cursor)
+            cursor += _BLOCK_HEADER.size
+            byte_count = count * ({_INT8: 1, _FLOAT16: 2, _FLOAT32: 4}.get(mode, 0))
+            if not byte_count or cursor + byte_count > len(payload):
+                raise ValueError("invalid OTS-DeltaQ tensor payload")
+            raw = payload[cursor : cursor + byte_count]
+            cursor += byte_count
+            if mode == _INT8:
+                residual = torch.frombuffer(bytearray(raw), dtype=torch.int8).to(torch.float32) * scale
+            elif mode == _FLOAT16:
+                residual = torch.frombuffer(bytearray(raw), dtype=torch.float16).to(torch.float32)
+            elif mode == _FLOAT32:
+                residual = torch.frombuffer(bytearray(raw), dtype=torch.float32).clone()
+            else:
+                raise ValueError("unknown OTS-DeltaQ block mode")
+            output[offset : offset + count] = source[offset : offset + count] + residual
+        if cursor != len(payload):
+            raise ValueError("unexpected bytes after OTS-DeltaQ tensor")
+        return output
+
+
+def _within_budget(value: torch.Tensor, error: torch.Tensor, energy: float, budget: float) -> bool:
+    squared_error = float(torch.sum(error.square(), dtype=torch.float64))
+    return squared_error <= budget * max(energy, 1e-30)
+
+
+def _step_metrics(
+    step: int,
+    gradients: Mapping[str, Optional[torch.Tensor]],
+    predictions: Mapping[str, Optional[torch.Tensor]],
+    decoded: Mapping[str, torch.Tensor],
+    *,
+    encoded_bytes: int,
+    block_counts: Mapping[str, int],
+    encode_seconds: float,
+) -> Dict[str, Any]:
+    gradient_energy = prediction_energy = prediction_error = 0.0
+    prediction_dot = reconstruction_error = 0.0
+    elements = 0
+    for name, tensor in gradients.items():
+        if tensor is None:
+            continue
+        gradient = tensor.detach().to(dtype=torch.float64, device="cpu")
+        prediction = predictions[name]
+        if prediction is None:
+            raise ValueError(f"missing prediction for gradient {name!r}")
+        prediction = prediction.to(torch.float64)
+        reconstruction = decoded[name].to(torch.float64)
+        gradient_energy += float(torch.sum(gradient.square()))
+        prediction_energy += float(torch.sum(prediction.square()))
+        prediction_dot += float(torch.sum(gradient * prediction))
+        prediction_error += float(torch.sum((gradient - prediction).square()))
+        reconstruction_error += float(torch.sum((gradient - reconstruction).square()))
+        elements += gradient.numel()
+    energy_floor = max(gradient_energy, 1e-30)
+    cosine_denominator = (gradient_energy * prediction_energy) ** 0.5
+    return {
+        "step": step,
+        "gradient_elements": elements,
+        "gradient_energy": gradient_energy,
+        "prediction_energy": prediction_energy,
+        "prediction_squared_error": prediction_error,
+        "prediction_energy_r2": 1.0 - prediction_error / energy_floor,
+        "prediction_cosine_similarity": (
+            prediction_dot / cosine_denominator if cosine_denominator else None
+        ),
+        "reconstruction_squared_error": reconstruction_error,
+        "reconstruction_energy_r2": 1.0 - reconstruction_error / energy_floor,
+        "encoded_bytes": encoded_bytes,
+        "encoded_bits_per_gradient_element": (
+            8.0 * encoded_bytes / elements if elements else 0.0
+        ),
+        "encode_seconds": encode_seconds,
+        **block_counts,
+    }
+
+
+def summarize_prediction_metrics(path: Path) -> Dict[str, Any]:
+    """Aggregate plot-ready JSONL without discarding the per-step trajectory."""
+
+    rows = [
+        json.loads(line)
+        for line in Path(path).read_text(encoding="utf-8").splitlines()
+    ]
+
+    def distribution(field: str) -> Dict[str, float]:
+        values = sorted(
+            float(row[field]) for row in rows if row.get(field) is not None
+        )
+        if not values:
+            return {}
+        return {
+            "mean": statistics.fmean(values),
+            "median": statistics.median(values),
+            "min": values[0],
+            "p05": values[round(0.05 * (len(values) - 1))],
+            "p95": values[round(0.95 * (len(values) - 1))],
+            "max": values[-1],
+        }
+
+    return {
+        "steps": len(rows),
+        "steps_with_positive_prediction_energy_r2": sum(
+            row["prediction_energy_r2"] > 0 for row in rows
+        ),
+        "prediction_energy_r2": distribution("prediction_energy_r2"),
+        "prediction_cosine_similarity": distribution(
+            "prediction_cosine_similarity"
+        ),
+        "reconstruction_energy_r2": distribution(
+            "reconstruction_energy_r2"
+        ),
+        "encoded_bits_per_gradient_element": distribution(
+            "encoded_bits_per_gradient_element"
+        ),
+        "encode_seconds": distribution("encode_seconds"),
+        "totals": {
+            field: sum(int(row[field]) for row in rows)
+            for field in (
+                "encoded_bytes",
+                "int8_blocks",
+                "float16_blocks",
+                "float32_blocks",
+            )
+        },
+    }
+
+
+def refresh_online_summary(summary_path: Path, metrics_path: Path) -> None:
+    """Attach aggregate prediction statistics to an existing online summary."""
+
+    summary_path = Path(summary_path)
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["prediction_metrics"] = summarize_prediction_metrics(metrics_path)
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def _canonical_json(value: Mapping[str, object]) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _read_exact(stream, count: int, context: str) -> bytes:
+    value = stream.read(count)
+    if len(value) != count:
+        raise ValueError(f"truncated {context}")
+    return value
+
+
+def _read_header(stream) -> Mapping[str, object]:
+    magic, version, size = _FILE_HEADER.unpack(_read_exact(stream, _FILE_HEADER.size, "header"))
+    if magic != _MAGIC or version != _VERSION:
+        raise ValueError("not an OTS-DeltaQ v1 artifact")
+    return json.loads(_read_exact(stream, size, "header metadata"))

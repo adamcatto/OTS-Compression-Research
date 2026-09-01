@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import random
 import time
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Optional
@@ -15,7 +16,24 @@ import torch
 
 from ..core.experiments import Experiment, ExperimentSpec, ExperimentStore
 from ..core.settings import Settings
+from ..compression.algorithms.ots_deltaq import OTSDeltaQCompressor
 from .api import GradientCaptureStage, GradientRecorder, TrainingTask
+
+
+def _state_dict_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _save_model_weights(model: torch.nn.Module, path: Path) -> str:
+    """Save CPU tensors only, so replay never depends on an accelerator."""
+
+    state = {name: value.detach().cpu().clone() for name, value in model.state_dict().items()}
+    torch.save(state, path)
+    return _state_dict_sha256(path)
 
 
 @dataclass(frozen=True)
@@ -210,6 +228,8 @@ def run_training(
     model = task.build_model(spec)
     _apply_initialization(model, spec.initialization)
     model = model.to(device)
+    initial_weights_path = experiment.path / "initial_model.pt"
+    initial_weights_sha256 = _save_model_weights(model, initial_weights_path)
     train_loader, _ = task.build_dataloaders(spec, settings.datasets_dir)
     optimizer = _optimizer(model, spec.optimizer)
     scheduler = _scheduler(optimizer, spec.scheduler, total_steps)
@@ -224,12 +244,72 @@ def run_training(
     completed_steps = 0
     final_loss = float("nan")
     model.train()
-    with GradientRecorder.open(
-        experiment.gradients_path,
-        experiment_id=experiment.experiment_id,
-        capture_stage=capture_stage,
-        durable=bool(training.get("durable_gradients", False)),
-    ) as recorder, metrics_path.open("w", encoding="utf-8") as metrics_stream:
+    online_config = training.get("online_compression")
+    online_destination: Optional[Path] = None
+    with ExitStack() as stack:
+        recorder = stack.enter_context(
+            GradientRecorder.open(
+                experiment.gradients_path,
+                experiment_id=experiment.experiment_id,
+                capture_stage=capture_stage,
+                durable=bool(training.get("durable_gradients", False)),
+            )
+        )
+        online_writer = None
+        if online_config is not None:
+            online_values = dict(online_config)
+            algorithm = str(online_values.pop("algorithm", "ots_deltaq_v1"))
+            if algorithm != "ots_deltaq_v1":
+                raise ValueError(f"unsupported online compression algorithm: {algorithm}")
+            save_predictions = bool(online_values.pop("save_predictions", True))
+            compressor = OTSDeltaQCompressor(
+                block_size=int(online_values.pop("block_size", 16_384)),
+                relative_squared_error=float(
+                    online_values.pop("relative_squared_error", 1e-4)
+                ),
+            )
+            if online_values:
+                raise ValueError(
+                    f"unknown online compression options: {sorted(online_values)}"
+                )
+            online_destination = (
+                experiment.path / "lossy" / compressor.name / "online"
+            )
+            online_writer = stack.enter_context(
+                compressor.open_online(
+                    online_destination / "compressed.otsdq",
+                    source_metadata={
+                        "experiment_id": experiment.experiment_id,
+                        "format": "ots-gradient-trace",
+                        "gradient_capture": capture_stage.value,
+                    },
+                    predictions_path=(
+                        online_destination / "predictions.otsg"
+                        if save_predictions
+                        else None
+                    ),
+                    prediction_metrics_path=(
+                        online_destination / "prediction_metrics.jsonl"
+                    ),
+                    summary_path=online_destination / "online_summary.json",
+                    durable=bool(training.get("durable_gradients", False)),
+                )
+            )
+        metrics_stream = stack.enter_context(metrics_path.open("w", encoding="utf-8"))
+
+        def record_gradients(step: int) -> None:
+            gradients = {
+                name: (
+                    parameter.grad.detach().to(device="cpu")
+                    if parameter.grad is not None
+                    else None
+                )
+                for name, parameter in model.named_parameters()
+            }
+            recorder.record(step, gradients)
+            if online_writer is not None:
+                online_writer.append(step, gradients)
+
         for step in range(total_steps):
             optimizer.zero_grad(set_to_none=True)
             accumulated_loss = 0.0
@@ -245,7 +325,7 @@ def run_training(
                 scaler.scale(backward_loss).backward()
 
             if capture_stage is GradientCaptureStage.BACKWARD_OUTPUT:
-                recorder.record_model(step, model)
+                record_gradients(step)
             if use_scaler:
                 scaler.unscale_(optimizer)
             if clip_norm is not None:
@@ -253,7 +333,7 @@ def run_training(
 
             if capture_stage is GradientCaptureStage.OPTIMIZER_INPUT:
                 # These are the unscaled/clipped gradients consumed by the optimizer.
-                recorder.record_model(step, model)
+                record_gradients(step)
             scaler.step(optimizer)
             scaler.update()
             if scheduler is not None:
@@ -270,6 +350,27 @@ def run_training(
             metrics_stream.flush()
 
     duration_seconds = time.perf_counter() - started
+    final_weights_path = experiment.path / "final_model.pt"
+    final_weights_sha256 = _save_model_weights(model, final_weights_path)
+    replay_contract = {
+        "format_version": 1,
+        "gradient_capture": capture_stage.value,
+        "initial_model": {"path": initial_weights_path.name, "sha256": initial_weights_sha256},
+        "final_model": {"path": final_weights_path.name, "sha256": final_weights_sha256},
+        "optimizer": spec.optimizer,
+        "scheduler": spec.scheduler,
+        "parameter_order": [
+            {"name": name, "shape": list(parameter.shape), "dtype": str(parameter.dtype)}
+            for name, parameter in model.named_parameters()
+            if parameter.requires_grad
+        ],
+        "seed": spec.seed,
+        "training": spec.training,
+        "note": "Optimizer replay is deterministic for the recorded gradient stream; loss probes additionally require a reproducible batch manifest.",
+    }
+    (experiment.path / "replay_contract.json").write_text(
+        json.dumps(replay_contract, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     result = TrainingResult(
         experiment=experiment,
         completed_steps=completed_steps,
@@ -285,6 +386,9 @@ def run_training(
         "final_loss": result.final_loss,
         "gradient_capture": capture_stage.value,
         "parameter_count": result.parameter_count,
+        "online_compression": (
+            str(online_destination) if online_destination is not None else None
+        ),
     }
     (experiment.path / "training_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"

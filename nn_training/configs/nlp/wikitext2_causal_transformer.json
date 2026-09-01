@@ -34,7 +34,13 @@
     "precision": "fp32",
     "device": "auto",
     "gradient_capture": "optimizer_input",
-    "gradient_clip_norm": 1.0
+    "gradient_clip_norm": 1.0,
+    "online_compression": {
+      "algorithm": "ots_deltaq_v1",
+      "block_size": 16384,
+      "relative_squared_error": 0.0001,
+      "save_predictions": true
+    }
   },
   "initialization": {
     "source": "random"
