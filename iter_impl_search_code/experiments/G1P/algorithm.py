@@ -265,6 +265,7 @@ def replay_transcript(
     device_name: str = "auto",
     measure_keyframe: bool = True,
     abort_r2: float = 0.90,
+    replayed_model: Optional[Path] = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     manifest = json.loads((experiment / "manifest.json").read_text(encoding="utf-8"))
     spec = _spec_from_manifest(manifest)
@@ -342,6 +343,20 @@ def replay_transcript(
             keyframe_bytes = _keyframe_size(model, optimizer, scheduler)
     total_values = sum(value.numel() for value in exact[steps[0]].values())
     training_steps = int(spec.training["steps"])
+    endpoint_metrics: Optional[dict[str, float | bool]] = None
+    endpoint_completed = not stopped_early and max(steps) == training_steps - 1
+    if endpoint_completed:
+        generated_final = {
+            name: value.detach().cpu().clone()
+            for name, value in model.state_dict().items()
+        }
+        exact_final = torch.load(
+            experiment / "final_model.pt", map_location="cpu", weights_only=True
+        )
+        endpoint_metrics = _compare(generated_final, exact_final)
+        if replayed_model is not None:
+            replayed_model.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(generated_final, replayed_model)
     transcript_bytes = transcript.stat().st_size
     total_raw_bytes = total_values * 4 * training_steps
     full_budget_bytes = math.floor(total_values * 0.32 / 8) * training_steps
@@ -373,6 +388,9 @@ def replay_transcript(
         "sequential_decode_seconds": time.perf_counter() - started,
         "optional_keyframe_bytes": keyframe_bytes,
         "maximum_additional_keyframes_under_budget": int(max_extra_keyframes),
+        "endpoint_completed": endpoint_completed,
+        "final_weight_metrics": endpoint_metrics,
+        "replayed_model": None if replayed_model is None else str(replayed_model),
         "external_side_information": contract["external_side_information"],
         "decision": (
             "procedural_side_information_control_aborted_below_continuation_cutoff"
@@ -396,6 +414,7 @@ def run_experiment(
     device_name: str = "auto",
     measure_keyframe: bool = True,
     abort_r2: float = 0.90,
+    replayed_model: Optional[Path] = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     trace = trace or experiment / "gradients.otsg"
     manifest = json.loads((experiment / "manifest.json").read_text(encoding="utf-8"))
@@ -431,6 +450,7 @@ def run_experiment(
             device_name=device_name,
             measure_keyframe=measure_keyframe,
             abort_r2=abort_r2,
+            replayed_model=replayed_model,
         )
     with tempfile.TemporaryDirectory(prefix="ots-g1p-") as directory:
         temporary = Path(directory) / "transcript.otsg1p"
@@ -451,6 +471,7 @@ def run_experiment(
             device_name=device_name,
             measure_keyframe=measure_keyframe,
             abort_r2=abort_r2,
+            replayed_model=replayed_model,
         )
 
 
@@ -466,6 +487,7 @@ def main() -> int:
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--skip-keyframe-measurement", action="store_true")
     parser.add_argument("--abort-r2", type=float, default=0.90)
+    parser.add_argument("--replayed-model", type=Path)
     args = parser.parse_args()
     rows, summary = run_experiment(
         args.experiment,
@@ -476,6 +498,7 @@ def main() -> int:
         device_name=args.device,
         measure_keyframe=not args.skip_keyframe_measurement,
         abort_r2=args.abort_r2,
+        replayed_model=args.replayed_model,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8", newline="") as stream:
