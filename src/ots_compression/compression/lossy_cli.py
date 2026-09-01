@@ -17,7 +17,11 @@ def main() -> int:
     parser.add_argument("--relative-squared-error", type=float, default=1e-4)
     parser.add_argument(
         "--prediction",
-        choices=["previous_decoded_gradient", "zero"],
+        choices=[
+            "previous_decoded_gradient",
+            "zero",
+            "adaptive_zero_previous",
+        ],
         default="previous_decoded_gradient",
     )
     parser.add_argument(

@@ -259,7 +259,11 @@ def run_training(
         if online_config is not None:
             online_values = dict(online_config)
             algorithm = str(online_values.pop("algorithm", "ots_deltaq_v1"))
-            if algorithm not in {"ots_deltaq_v1", "ots_deltaq_zero_v1"}:
+            if algorithm not in {
+                "ots_deltaq_v1",
+                "ots_deltaq_zero_v1",
+                "ots_deltaq_adaptive_predictor_v1",
+            }:
                 raise ValueError(f"unsupported online compression algorithm: {algorithm}")
             save_predictions = bool(online_values.pop("save_predictions", True))
             compressor = OTSDeltaQCompressor(
@@ -270,7 +274,11 @@ def run_training(
                 prediction=(
                     "zero"
                     if algorithm == "ots_deltaq_zero_v1"
-                    else "previous_decoded_gradient"
+                    else (
+                        "adaptive_zero_previous"
+                        if algorithm == "ots_deltaq_adaptive_predictor_v1"
+                        else "previous_decoded_gradient"
+                    )
                 ),
             )
             if online_values:

@@ -98,3 +98,39 @@ def test_deltaq_zero_predictor_is_decoder_consistent(tmp_path: Path) -> None:
 def test_deltaq_rejects_unknown_predictor() -> None:
     with pytest.raises(ValueError, match="prediction"):
         OTSDeltaQCompressor(prediction="future_gradient")
+
+
+def test_deltaq_adaptive_predictor_selects_per_block(tmp_path: Path) -> None:
+    block_size = 1_024
+    compressor = OTSDeltaQCompressor(
+        block_size=block_size,
+        prediction="adaptive_zero_previous",
+    )
+    current = torch.full((2 * block_size,), 0.0039)
+    previous = torch.zeros_like(current)
+    current[0] = 1.0
+    previous[0] = 1.0
+    previous[block_size] = 1.0
+
+    _, reconstruction, selected_prediction, counts = compressor._encode_tensor(
+        current, previous
+    )
+
+    assert compressor.name == "ots_deltaq_adaptive_predictor_v1"
+    assert counts["previous_prediction_blocks"] == 1
+    assert counts["zero_prediction_blocks"] == 1
+    assert selected_prediction[0] == 1.0
+    assert selected_prediction[block_size] == 0.0
+    relative_error = float((current - reconstruction).square().sum() / current.square().sum())
+    assert relative_error <= 1e-4
+
+    source = tmp_path / "adaptive.otsg"
+    with GradientTraceWriter(source, experiment_id="adaptive-unit") as writer:
+        writer.append(0, {"weight": previous})
+        writer.append(1, {"weight": current})
+    metrics = benchmark_deltaq(
+        source, compressor, tmp_path / "ots_deltaq_adaptive_predictor_v1"
+    )
+    assert metrics.gradient_energy_r2 >= 0.999898
+    assert metrics.codec_stats["previous_prediction_blocks"] > 0
+    assert metrics.codec_stats["zero_prediction_blocks"] > 0
