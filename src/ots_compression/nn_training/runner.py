@@ -265,6 +265,7 @@ def run_training(
                 "ots_deltaq_adaptive_predictor_v1",
                 "ots_deltaq_outlier_v1",
                 "ots_rank1_deltaq_e1",
+                "ots_rank1_tracking_e2",
             }:
                 raise ValueError(f"unsupported online compression algorithm: {algorithm}")
             save_predictions = bool(online_values.pop("save_predictions", True))
@@ -280,12 +281,18 @@ def run_training(
                         "adaptive_zero_previous"
                         if algorithm == "ots_deltaq_adaptive_predictor_v1"
                         else "rank1_tensor"
-                        if algorithm == "ots_rank1_deltaq_e1"
+                        if algorithm in {"ots_rank1_deltaq_e1", "ots_rank1_tracking_e2"}
                         else "previous_decoded_gradient"
                     )
                 ),
                 rank1_power_iterations=int(
                     online_values.pop("rank1_power_iterations", 1)
+                ),
+                rank1_warm_start=bool(
+                    online_values.pop(
+                        "rank1_warm_start",
+                        algorithm == "ots_rank1_tracking_e2",
+                    )
                 ),
                 outlier_fraction=float(
                     online_values.pop(

@@ -79,6 +79,9 @@ def test_deltaq_online_writer_saves_decoder_predictions_and_step_metrics(
     assert [metric["step"] for metric in metrics] == [0, 1]
     assert metrics[0]["prediction_energy_r2"] == 0.0
     assert metrics[1]["reconstruction_energy_r2"] >= 0.9999
+    assert metrics[1]["compression_latency_ms"] > 0
+    assert metrics[1]["compression_ratio"] > 0
+    assert metrics[1]["compression_throughput_mib_per_second"] > 0
     assert summary.is_file()
 
 
@@ -217,3 +220,25 @@ def test_rank1_tensor_prediction_round_trips_selected_factors(tmp_path: Path) ->
 def test_rank1_rejects_invalid_iteration_count() -> None:
     with pytest.raises(ValueError, match="rank1_power_iterations"):
         OTSDeltaQCompressor(rank1_power_iterations=0)
+
+
+def test_e2_warm_start_tracks_temporal_matrix_subspace() -> None:
+    compressor = OTSDeltaQCompressor(
+        prediction="rank1_tensor",
+        rank1_power_iterations=1,
+        rank1_warm_start=True,
+    )
+    first = torch.diag(torch.tensor([10.0, 1.0]))
+    current = torch.diag(torch.tensor([10.0, 9.0]))
+
+    initial = compressor._encode_rank1_prediction(first)
+    assert initial is not None
+    warm = compressor._encode_rank1_prediction(current, initial[2])
+    fixed = compressor._encode_rank1_prediction(current)
+    assert warm is not None and fixed is not None
+    warm_error = float((current - warm[0]).square().sum())
+    fixed_error = float((current - fixed[0]).square().sum())
+
+    assert compressor.name == "ots_rank1_tracking_e2"
+    assert compressor.configuration()["rank1_warm_start"] is True
+    assert warm_error < fixed_error

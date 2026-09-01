@@ -105,6 +105,7 @@ class OTSDeltaQOnlineWriter:
         self._stream = self.temporary_path.open("wb")
         self._durable = durable
         self._predictors: Dict[str, torch.Tensor] = {}
+        self._rank1_vectors: Dict[str, torch.Tensor] = {}
         self._last_step: Optional[int] = None
         self._started = time.perf_counter()
         self._counters = {
@@ -177,6 +178,7 @@ class OTSDeltaQOnlineWriter:
             GradientStep(step=step, gradients=gradients),
             self._predictors,
             self._counters,
+            self._rank1_vectors,
         )
         fixed = _RECORD_HEADER.pack(
             _RECORD_MAGIC, step, len(metadata), len(payload)
@@ -288,6 +290,7 @@ class OTSDeltaQCompressor:
         prediction: str = "previous_decoded_gradient",
         outlier_fraction: float = 0.0,
         rank1_power_iterations: int = 1,
+        rank1_warm_start: bool = False,
     ):
         if block_size <= 0:
             raise ValueError("block_size must be positive")
@@ -312,11 +315,16 @@ class OTSDeltaQCompressor:
         self.prediction = prediction
         self.outlier_fraction = outlier_fraction
         self.rank1_power_iterations = rank1_power_iterations
+        self.rank1_warm_start = rank1_warm_start
 
     @property
     def name(self) -> str:
         if self.prediction == "rank1_tensor":
-            return "ots_rank1_deltaq_e1"
+            return (
+                "ots_rank1_tracking_e2"
+                if self.rank1_warm_start
+                else "ots_rank1_deltaq_e1"
+            )
         if self.outlier_fraction:
             return "ots_deltaq_outlier_v1"
         if self.prediction == "zero":
@@ -336,6 +344,7 @@ class OTSDeltaQCompressor:
             "outlier_storage": "int32_index_plus_float16_value",
             "rank1_power_iterations": self.rank1_power_iterations,
             "rank1_factor_dtype": "float16",
+            "rank1_warm_start": self.rank1_warm_start,
         }
 
     def open_online(
@@ -555,6 +564,7 @@ class OTSDeltaQCompressor:
         record: GradientStep,
         predictors: Mapping[str, torch.Tensor],
         counters: dict,
+        rank1_vectors: Optional[Dict[str, torch.Tensor]] = None,
     ) -> Tuple[
         bytes,
         bytes,
@@ -576,9 +586,14 @@ class OTSDeltaQCompressor:
             )
             descriptor_extra = {}
             if self.prediction == "rank1_tensor" and value.ndim == 2:
-                rank1 = self._encode_rank1_prediction(value)
+                initial_right = None
+                if self.rank1_warm_start and rank1_vectors is not None:
+                    initial_right = rank1_vectors.get(name)
+                rank1 = self._encode_rank1_prediction(value, initial_right)
                 if rank1 is not None:
-                    rank1_prediction, factors = rank1
+                    rank1_prediction, factors, tracked_right = rank1
+                    if self.rank1_warm_start and rank1_vectors is not None:
+                        rank1_vectors[name] = tracked_right
                     rank1_encoded, rank1_reconstruction, _, rank1_counts = (
                         self._encode_tensor(
                             value, rank1_prediction, predictor_kind="rank1"
@@ -729,12 +744,22 @@ class OTSDeltaQCompressor:
         return output.getvalue(), reconstruction, selected_prediction, counts
 
     def _encode_rank1_prediction(
-        self, value: torch.Tensor
-    ) -> Optional[Tuple[torch.Tensor, bytes]]:
+        self,
+        value: torch.Tensor,
+        initial_right: Optional[torch.Tensor] = None,
+    ) -> Optional[Tuple[torch.Tensor, bytes, torch.Tensor]]:
         rows, columns = value.shape
         if rows < 2 or columns < 2:
             return None
-        right = torch.ones(columns, dtype=torch.float32) / math.sqrt(columns)
+        if initial_right is None or initial_right.numel() != columns:
+            right = torch.ones(columns, dtype=torch.float32) / math.sqrt(columns)
+        else:
+            right = initial_right.detach().to(torch.float32).reshape(columns).clone()
+            norm = float(torch.linalg.vector_norm(right))
+            if norm == 0.0:
+                right.fill_(1.0 / math.sqrt(columns))
+            else:
+                right /= norm
         for _ in range(self.rank1_power_iterations):
             left = value.mv(right)
             right = value.T.mv(left)
@@ -748,7 +773,7 @@ class OTSDeltaQCompressor:
         decoded_right = right_half.to(torch.float32)
         prediction = torch.outer(decoded_left, decoded_right)
         factors = left_half.numpy().tobytes() + right_half.numpy().tobytes()
-        return prediction, factors
+        return prediction, factors, right.clone()
 
     @staticmethod
     def _decode_rank1_prediction(
@@ -925,6 +950,7 @@ def _step_metrics(
     gradient_energy = prediction_energy = prediction_error = 0.0
     prediction_dot = reconstruction_error = 0.0
     elements = 0
+    source_tensor_bytes = 0
     for name, tensor in gradients.items():
         if tensor is None:
             continue
@@ -940,6 +966,7 @@ def _step_metrics(
         prediction_error += float(torch.sum((gradient - prediction).square()))
         reconstruction_error += float(torch.sum((gradient - reconstruction).square()))
         elements += gradient.numel()
+        source_tensor_bytes += tensor.numel() * tensor.element_size()
     energy_floor = max(gradient_energy, 1e-30)
     cosine_denominator = (gradient_energy * prediction_energy) ** 0.5
     return {
@@ -955,6 +982,16 @@ def _step_metrics(
         "reconstruction_squared_error": reconstruction_error,
         "reconstruction_energy_r2": 1.0 - reconstruction_error / energy_floor,
         "encoded_bytes": encoded_bytes,
+        "source_tensor_bytes": source_tensor_bytes,
+        "compression_ratio": (
+            source_tensor_bytes / encoded_bytes if encoded_bytes else None
+        ),
+        "compression_latency_ms": 1_000.0 * encode_seconds,
+        "compression_throughput_mib_per_second": (
+            source_tensor_bytes / (1024.0 * 1024.0 * encode_seconds)
+            if encode_seconds
+            else None
+        ),
         "encoded_bits_per_gradient_element": (
             8.0 * encoded_bytes / elements if elements else 0.0
         ),
@@ -1002,6 +1039,11 @@ def summarize_prediction_metrics(path: Path) -> Dict[str, Any]:
             "encoded_bits_per_gradient_element"
         ),
         "encode_seconds": distribution("encode_seconds"),
+        "compression_latency_ms": distribution("compression_latency_ms"),
+        "compression_ratio": distribution("compression_ratio"),
+        "compression_throughput_mib_per_second": distribution(
+            "compression_throughput_mib_per_second"
+        ),
         "totals": {
             field: sum(int(row[field]) for row in rows)
             for field in (
