@@ -20,7 +20,7 @@ def main() -> int:
     parser.add_argument("--rank1-warm-start", action="store_true")
     parser.add_argument(
         "--allocation",
-        choices=["per_block", "optimizer_aware_global"],
+        choices=["per_block", "optimizer_aware_global", "rate_matched_optimizer"],
         default="per_block",
     )
     parser.add_argument(
@@ -29,6 +29,7 @@ def main() -> int:
     parser.add_argument("--sensitivity-beta2", type=float, default=0.999)
     parser.add_argument("--sensitivity-epsilon", type=float, default=1e-8)
     parser.add_argument("--allocator-iterations", type=int, default=40)
+    parser.add_argument("--target-payload-bits-per-element", type=float)
     parser.add_argument(
         "--block-transform",
         choices=["none", "randomized_hadamard"],
@@ -75,6 +76,7 @@ def main() -> int:
         sensitivity_beta2=args.sensitivity_beta2,
         sensitivity_epsilon=args.sensitivity_epsilon,
         allocator_iterations=args.allocator_iterations,
+        target_payload_bits_per_element=args.target_payload_bits_per_element,
     )
     mode = (
         "online"

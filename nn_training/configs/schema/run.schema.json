@@ -107,7 +107,8 @@
                 "ots_rank1_deltaq_e1",
                 "ots_rank1_tracking_e2",
                 "ots_rht_deltaq_f1",
-                "ots_rht_adam_allocator_f2"
+                "ots_rht_adam_allocator_f2",
+                "ots_rht_adam_rate_matched_f2r"
               ]
             },
             "block_size": {
@@ -150,6 +151,9 @@
             "allocator_iterations": {
               "type": "integer",
               "minimum": 1
+            },
+            "target_payload_bits_per_element": {
+              "$ref": "common.schema.json#/$defs/positiveNumber"
             }
           }
         }

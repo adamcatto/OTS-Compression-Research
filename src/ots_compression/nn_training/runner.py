@@ -268,6 +268,7 @@ def run_training(
                 "ots_rank1_tracking_e2",
                 "ots_rht_deltaq_f1",
                 "ots_rht_adam_allocator_f2",
+                "ots_rht_adam_rate_matched_f2r",
             }:
                 raise ValueError(f"unsupported online compression algorithm: {algorithm}")
             save_predictions = bool(online_values.pop("save_predictions", True))
@@ -283,6 +284,7 @@ def run_training(
                         "ots_deltaq_zero_v1",
                         "ots_rht_deltaq_f1",
                         "ots_rht_adam_allocator_f2",
+                        "ots_rht_adam_rate_matched_f2r",
                     }
                     else (
                         "adaptive_zero_previous"
@@ -310,12 +312,18 @@ def run_training(
                 block_transform=(
                     "randomized_hadamard"
                     if algorithm
-                    in {"ots_rht_deltaq_f1", "ots_rht_adam_allocator_f2"}
+                    in {
+                        "ots_rht_deltaq_f1",
+                        "ots_rht_adam_allocator_f2",
+                        "ots_rht_adam_rate_matched_f2r",
+                    }
                     else "none"
                 ),
                 allocation=(
                     "optimizer_aware_global"
                     if algorithm == "ots_rht_adam_allocator_f2"
+                    else "rate_matched_optimizer"
+                    if algorithm == "ots_rht_adam_rate_matched_f2r"
                     else "per_block"
                 ),
                 preconditioned_relative_squared_error=float(
@@ -337,6 +345,11 @@ def run_training(
                 ),
                 allocator_iterations=int(
                     online_values.pop("allocator_iterations", 40)
+                ),
+                target_payload_bits_per_element=(
+                    float(online_values.pop("target_payload_bits_per_element"))
+                    if "target_payload_bits_per_element" in online_values
+                    else None
                 ),
             )
             if online_values:

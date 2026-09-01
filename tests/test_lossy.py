@@ -331,3 +331,61 @@ def test_f2_requires_the_isolated_f1_representation() -> None:
         OTSDeltaQCompressor(allocation="optimizer_aware_global")
     with pytest.raises(ValueError, match="preconditioned_relative_squared_error"):
         OTSDeltaQCompressor(preconditioned_relative_squared_error=1.0)
+
+
+def test_f2r_rate_matches_with_a_carried_reservoir_and_round_trips(
+    tmp_path: Path,
+) -> None:
+    block_size = 256
+    target_bpe = 12.2
+    compressor = OTSDeltaQCompressor(
+        block_size=block_size,
+        relative_squared_error=1e-4,
+        prediction="zero",
+        block_transform="randomized_hadamard",
+        allocation="rate_matched_optimizer",
+        sensitivity_beta2=0.95,
+        target_payload_bits_per_element=target_bpe,
+    )
+    source = tmp_path / "f2r.otsg"
+    generator = torch.Generator().manual_seed(31)
+    with GradientTraceWriter(source, experiment_id="f2r-unit") as writer:
+        for step in range(3):
+            first_scale = 1e-3 if step == 0 else 1.0
+            first = torch.randn(block_size, generator=generator) * first_scale
+            second = torch.randn(block_size, generator=generator)
+            writer.append(step, {"weight": torch.cat((first, second))})
+
+    metrics = benchmark_deltaq(source, compressor, tmp_path / compressor.name)
+    rows = [
+        json.loads(line)
+        for line in (
+            tmp_path / compressor.name / "prediction_metrics.jsonl"
+        ).read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert compressor.name == "ots_rht_adam_rate_matched_f2r"
+    assert compressor.configuration()["allocation"] == "rate_matched_optimizer"
+    assert metrics.gradient_energy_r2 >= 0.9999
+    assert metrics.codec_stats["float16_blocks"] >= 3
+    assert all(
+        row["allocator_raw_relative_squared_error"] <= 1.000001e-4
+        for row in rows
+    )
+    assert all(row["allocator_rate_upgrades"] >= 1 for row in rows)
+    assert abs(
+        sum(row["allocator_selected_payload_bytes"] for row in rows)
+        - target_bpe
+        * sum(row["gradient_elements"] for row in rows)
+        / 8.0
+    ) < block_size
+    assert abs(rows[-1]["allocator_rate_reservoir_bytes"]) < block_size
+
+
+def test_f2r_requires_an_explicit_positive_target_rate() -> None:
+    with pytest.raises(ValueError, match="target_payload_bits_per_element"):
+        OTSDeltaQCompressor(
+            prediction="zero",
+            block_transform="randomized_hadamard",
+            allocation="rate_matched_optimizer",
+        )

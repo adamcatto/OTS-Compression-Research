@@ -9,6 +9,7 @@ float16 or float32.  The decoder updates exactly the same predictor.
 
 from __future__ import annotations
 
+import heapq
 import io
 import json
 import math
@@ -140,6 +141,7 @@ class OTSDeltaQOnlineWriter:
         self._predictors: Dict[str, torch.Tensor] = {}
         self._rank1_vectors: Dict[str, torch.Tensor] = {}
         self._sensitivity_state: Dict[str, torch.Tensor] = {}
+        self._rate_state: Dict[str, float] = {}
         self._last_step: Optional[int] = None
         self._started = time.perf_counter()
         self._counters = {
@@ -216,6 +218,7 @@ class OTSDeltaQOnlineWriter:
             self._counters,
             self._rank1_vectors,
             self._sensitivity_state,
+            self._rate_state,
         )
         fixed = _RECORD_HEADER.pack(
             _RECORD_MAGIC, step, len(metadata), len(payload)
@@ -318,9 +321,10 @@ class OTSDeltaQCompressor:
     """Blockwise temporal residual codec suitable for sharded online use.
 
     The legacy ``per_block`` allocator checks ``relative_squared_error`` for
-    every block independently.  F2's ``optimizer_aware_global`` allocator
+    every block independently. F2's ``optimizer_aware_global`` allocator
     instead enforces raw and sensitivity-weighted bounds across each emitted
-    step while choosing block modes jointly.
+    step while choosing block modes jointly. F2R's ``rate_matched_optimizer``
+    allocator minimizes sensitivity-weighted error at a carried payload rate.
     """
 
     def __init__(
@@ -338,6 +342,7 @@ class OTSDeltaQCompressor:
         sensitivity_beta2: float = 0.999,
         sensitivity_epsilon: float = 1e-8,
         allocator_iterations: int = 40,
+        target_payload_bits_per_element: Optional[float] = None,
     ):
         if block_size <= 0:
             raise ValueError("block_size must be positive")
@@ -361,9 +366,14 @@ class OTSDeltaQCompressor:
             raise ValueError(
                 "block_transform must be 'none' or 'randomized_hadamard'"
             )
-        if allocation not in {"per_block", "optimizer_aware_global"}:
+        if allocation not in {
+            "per_block",
+            "optimizer_aware_global",
+            "rate_matched_optimizer",
+        }:
             raise ValueError(
-                "allocation must be 'per_block' or 'optimizer_aware_global'"
+                "allocation must be 'per_block', 'optimizer_aware_global', "
+                "or 'rate_matched_optimizer'"
             )
         if not 0 < preconditioned_relative_squared_error < 1:
             raise ValueError(
@@ -375,14 +385,22 @@ class OTSDeltaQCompressor:
             raise ValueError("sensitivity_epsilon must be positive")
         if allocator_iterations <= 0:
             raise ValueError("allocator_iterations must be positive")
-        if allocation == "optimizer_aware_global" and (
+        if allocation in {"optimizer_aware_global", "rate_matched_optimizer"} and (
             prediction != "zero"
             or block_transform != "randomized_hadamard"
             or outlier_fraction != 0.0
         ):
             raise ValueError(
-                "optimizer_aware_global requires zero prediction, randomized "
-                "Hadamard blocks, and no sparse outlier mode"
+                f"{allocation} requires zero prediction, randomized Hadamard "
+                "blocks, and no sparse outlier mode"
+            )
+        if allocation == "rate_matched_optimizer" and (
+            target_payload_bits_per_element is None
+            or target_payload_bits_per_element <= 0
+        ):
+            raise ValueError(
+                "rate_matched_optimizer requires positive "
+                "target_payload_bits_per_element"
             )
         self.block_size = block_size
         self.relative_squared_error = relative_squared_error
@@ -398,11 +416,14 @@ class OTSDeltaQCompressor:
         self.sensitivity_beta2 = sensitivity_beta2
         self.sensitivity_epsilon = sensitivity_epsilon
         self.allocator_iterations = allocator_iterations
+        self.target_payload_bits_per_element = target_payload_bits_per_element
         self._rht_sign_cache: Dict[int, torch.Tensor] = {}
         self._last_allocator_metrics: Dict[str, Any] = {}
 
     @property
     def name(self) -> str:
+        if self.allocation == "rate_matched_optimizer":
+            return "ots_rht_adam_rate_matched_f2r"
         if self.allocation == "optimizer_aware_global":
             return "ots_rht_adam_allocator_f2"
         if self.block_transform == "randomized_hadamard":
@@ -443,8 +464,17 @@ class OTSDeltaQCompressor:
             "sensitivity_epsilon": self.sensitivity_epsilon,
             "sensitivity_granularity": "one_ema_mean_square_per_block",
             "sensitivity_state_source": "previously_decoded_gradients_only",
-            "allocator": "two_multiplier_separable_lagrangian",
+            "allocator": (
+                "carried_rate_constrained_optimizer_proxy"
+                if self.allocation == "rate_matched_optimizer"
+                else "two_multiplier_separable_lagrangian"
+                if self.allocation == "optimizer_aware_global"
+                else None
+            ),
             "allocator_iterations": self.allocator_iterations,
+            "target_payload_bits_per_element": (
+                self.target_payload_bits_per_element
+            ),
         }
 
     def open_online(
@@ -513,7 +543,10 @@ class OTSDeltaQCompressor:
                     gradients, decoded, _ = self._decode_step(metadata, payload, predictors)
                     writer.append(step, gradients)
                     predictors.update(decoded)
-                    if self.allocation == "optimizer_aware_global":
+                    if self.allocation in {
+                        "optimizer_aware_global",
+                        "rate_matched_optimizer",
+                    }:
                         self._update_sensitivity_state(decoded, sensitivity_state)
                     previous = step
 
@@ -559,7 +592,10 @@ class OTSDeltaQCompressor:
                     )
                     writer.append(step, predictions)
                     predictors.update(decoded)
-                    if self.allocation == "optimizer_aware_global":
+                    if self.allocation in {
+                        "optimizer_aware_global",
+                        "rate_matched_optimizer",
+                    }:
                         self._update_sensitivity_state(decoded, sensitivity_state)
                     previous = step
 
@@ -677,6 +713,7 @@ class OTSDeltaQCompressor:
         counters: dict,
         rank1_vectors: Optional[Dict[str, torch.Tensor]] = None,
         sensitivity_state: Optional[Dict[str, torch.Tensor]] = None,
+        rate_state: Optional[Dict[str, float]] = None,
     ) -> Tuple[
         bytes,
         bytes,
@@ -684,11 +721,13 @@ class OTSDeltaQCompressor:
         Dict[str, Optional[torch.Tensor]],
     ]:
         self._last_allocator_metrics = {}
-        if self.allocation == "optimizer_aware_global":
+        if self.allocation in {"optimizer_aware_global", "rate_matched_optimizer"}:
             if sensitivity_state is None:
                 sensitivity_state = {}
+            if rate_state is None:
+                rate_state = {}
             return self._encode_step_optimizer_aware(
-                record, counters, sensitivity_state
+                record, counters, sensitivity_state, rate_state
             )
         descriptors, payload_parts, decoded, selected_predictions = [], [], {}, {}
         offset = 0
@@ -749,6 +788,7 @@ class OTSDeltaQCompressor:
         record: GradientStep,
         counters: dict,
         sensitivity_state: Dict[str, torch.Tensor],
+        rate_state: Dict[str, float],
     ) -> Tuple[
         bytes,
         bytes,
@@ -815,7 +855,12 @@ class OTSDeltaQCompressor:
                     )
                 )
 
-        selected, allocator_metrics = self._allocate_f2_candidates(blocks)
+        if self.allocation == "rate_matched_optimizer":
+            selected, allocator_metrics = self._allocate_rate_matched_candidates(
+                blocks, rate_state
+            )
+        else:
+            selected, allocator_metrics = self._allocate_f2_candidates(blocks)
         self._last_allocator_metrics = allocator_metrics
 
         descriptors: List[dict] = []
@@ -1108,6 +1153,153 @@ class OTSDeltaQCompressor:
             "allocator_dual_iterations": self.allocator_iterations,
             "allocator_local_downgrades": downgrades,
             "allocator_selected_payload_bytes": payload_bytes,
+            "allocator_block_count": len(blocks),
+            "sensitivity_weight_min": min(weights),
+            "sensitivity_weight_max": max(weights),
+        }
+
+    def _allocate_rate_matched_candidates(
+        self,
+        blocks: Sequence[_F2Block],
+        rate_state: Dict[str, float],
+    ) -> Tuple[List[int], Dict[str, Any]]:
+        """Minimize the optimizer proxy under a causal carried byte budget.
+
+        F2R starts at the cheapest point on every block frontier. If that point
+        violates the raw fidelity bound, it first buys the most raw-error
+        reduction per byte until the bound is met. It then spends the remaining
+        rate on the greatest sensitivity-weighted error reduction per byte.
+        Fractional target bytes accumulate across steps, and underspend caused
+        by indivisible blocks is carried forward in ``rate_state``.
+        """
+
+        if not blocks:
+            return [], {
+                "allocator_raw_relative_squared_error": 0.0,
+                "optimizer_proxy_relative_squared_error": 0.0,
+                "allocator_dual_iterations": 0,
+                "allocator_selected_payload_bytes": 0,
+                "allocator_target_payload_bytes": 0,
+                "allocator_rate_reservoir_bytes": 0.0,
+                "allocator_raw_safety_upgrades": 0,
+                "allocator_rate_upgrades": 0,
+            }
+        if self.target_payload_bits_per_element is None:
+            raise RuntimeError("rate-matched allocation has no target rate")
+
+        selected = [0] * len(blocks)
+        payload_bytes = sum(block.candidates[0].payload_nbytes for block in blocks)
+        raw_error = sum(block.candidates[0].squared_error for block in blocks)
+        weighted_error = sum(
+            block.candidates[0].squared_error * block.sensitivity_weight
+            for block in blocks
+        )
+        raw_energy = max(sum(block.energy for block in blocks), 1e-30)
+        weighted_energy = max(
+            sum(block.energy * block.sensitivity_weight for block in blocks),
+            1e-30,
+        )
+        raw_limit = self.relative_squared_error * raw_energy
+        elements = sum(block.count for block in blocks)
+
+        cumulative_target = rate_state.get("cumulative_target_payload_bytes", 0.0)
+        cumulative_actual = rate_state.get("cumulative_actual_payload_bytes", 0.0)
+        cumulative_target += (
+            self.target_payload_bits_per_element * elements / 8.0
+        )
+        target_payload_bytes = max(
+            payload_bytes, int(math.floor(cumulative_target - cumulative_actual))
+        )
+
+        def make_heap(weighted: bool) -> List[Tuple[float, float, int, int]]:
+            heap: List[Tuple[float, float, int, int]] = []
+            for block_index, block in enumerate(blocks):
+                current_index = selected[block_index]
+                next_index = current_index + 1
+                if next_index >= len(block.candidates):
+                    continue
+                current = block.candidates[current_index]
+                candidate = block.candidates[next_index]
+                added = candidate.payload_nbytes - current.payload_nbytes
+                raw_gain = current.squared_error - candidate.squared_error
+                gain = raw_gain * block.sensitivity_weight if weighted else raw_gain
+                if added > 0 and gain > 0:
+                    heapq.heappush(
+                        heap,
+                        (-gain / added, -raw_gain / added, block_index, next_index),
+                    )
+            return heap
+
+        def buy_upgrades(
+            *, weighted: bool, require_raw_feasibility: bool
+        ) -> int:
+            nonlocal payload_bytes, raw_error, weighted_error
+            upgrades = 0
+            heap = make_heap(weighted)
+            while heap and (
+                (require_raw_feasibility and raw_error > raw_limit)
+                or not require_raw_feasibility
+            ):
+                _, _, block_index, next_index = heapq.heappop(heap)
+                if next_index != selected[block_index] + 1:
+                    continue
+                block = blocks[block_index]
+                current = block.candidates[selected[block_index]]
+                candidate = block.candidates[next_index]
+                added = candidate.payload_nbytes - current.payload_nbytes
+                if not require_raw_feasibility and payload_bytes + added > target_payload_bytes:
+                    continue
+                raw_gain = current.squared_error - candidate.squared_error
+                selected[block_index] = next_index
+                payload_bytes += added
+                raw_error -= raw_gain
+                weighted_error -= raw_gain * block.sensitivity_weight
+                upgrades += 1
+                following = next_index + 1
+                if following < len(block.candidates):
+                    later = block.candidates[following]
+                    extra = later.payload_nbytes - candidate.payload_nbytes
+                    later_raw_gain = candidate.squared_error - later.squared_error
+                    later_gain = (
+                        later_raw_gain * block.sensitivity_weight
+                        if weighted
+                        else later_raw_gain
+                    )
+                    if extra > 0 and later_gain > 0:
+                        heapq.heappush(
+                            heap,
+                            (
+                                -later_gain / extra,
+                                -later_raw_gain / extra,
+                                block_index,
+                                following,
+                            ),
+                        )
+            return upgrades
+
+        raw_safety_upgrades = buy_upgrades(
+            weighted=False, require_raw_feasibility=True
+        )
+        if raw_error > raw_limit * (1.0 + 1e-12):
+            raise RuntimeError("rate-matched allocator could not meet raw fidelity")
+        rate_upgrades = buy_upgrades(
+            weighted=True, require_raw_feasibility=False
+        )
+
+        cumulative_actual += payload_bytes
+        rate_state["cumulative_target_payload_bytes"] = cumulative_target
+        rate_state["cumulative_actual_payload_bytes"] = cumulative_actual
+        weights = [block.sensitivity_weight for block in blocks]
+        return selected, {
+            "allocator_raw_relative_squared_error": raw_error / raw_energy,
+            "optimizer_proxy_relative_squared_error": weighted_error / weighted_energy,
+            "allocator_dual_iterations": 0,
+            "allocator_local_downgrades": 0,
+            "allocator_selected_payload_bytes": payload_bytes,
+            "allocator_target_payload_bytes": target_payload_bytes,
+            "allocator_rate_reservoir_bytes": cumulative_target - cumulative_actual,
+            "allocator_raw_safety_upgrades": raw_safety_upgrades,
+            "allocator_rate_upgrades": rate_upgrades,
             "allocator_block_count": len(blocks),
             "sensitivity_weight_min": min(weights),
             "sensitivity_weight_max": max(weights),
@@ -1672,6 +1864,9 @@ def summarize_prediction_metrics(path: Path) -> Dict[str, Any]:
         ),
         "optimizer_proxy_relative_squared_error": distribution(
             "optimizer_proxy_relative_squared_error"
+        ),
+        "allocator_rate_reservoir_bytes": distribution(
+            "allocator_rate_reservoir_bytes"
         ),
         "totals": {
             field: sum(int(row[field]) for row in rows)
