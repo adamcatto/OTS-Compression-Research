@@ -5,7 +5,10 @@ import pytest
 import torch
 
 from ots_compression.compression.algorithms.ots_deltaq import OTSDeltaQCompressor
-from ots_compression.compression.lossy import benchmark_deltaq
+from ots_compression.compression.lossy import (
+    benchmark_deltaq,
+    compare_prediction_traces,
+)
 from ots_compression.core.gradient_trace import GradientTraceReader, GradientTraceWriter
 
 
@@ -169,3 +172,48 @@ def test_deltaq_sparse_outliers_enable_int8_inliers(tmp_path: Path) -> None:
 def test_deltaq_rejects_invalid_outlier_fraction() -> None:
     with pytest.raises(ValueError, match="outlier_fraction"):
         OTSDeltaQCompressor(outlier_fraction=1.0)
+
+
+def test_rank1_tensor_prediction_round_trips_selected_factors(tmp_path: Path) -> None:
+    left = torch.logspace(-3, 0, 128)
+    right = torch.logspace(-3, 0, 128)
+    gradient = torch.outer(left, right)
+    source = tmp_path / "rank1.otsg"
+    with GradientTraceWriter(source, experiment_id="rank1-unit") as writer:
+        writer.append(0, {"matrix": gradient})
+
+    compressor = OTSDeltaQCompressor(
+        block_size=16_384,
+        prediction="rank1_tensor",
+        rank1_power_iterations=1,
+    )
+    metrics = benchmark_deltaq(source, compressor, tmp_path / compressor.name)
+
+    assert metrics.gradient_energy_r2 >= 0.9999
+    assert metrics.codec_stats["rank1_prediction_tensors"] == 1
+    assert metrics.codec_stats["rank1_factor_bytes"] == 512
+    predictions = list(
+        GradientTraceReader(
+            tmp_path / compressor.name / "predictions.otsg"
+        ).steps()
+    )
+    assert len(predictions) == 1
+    assert predictions[0].gradients["matrix"].shape == gradient.shape
+    extracted_path = tmp_path / "extracted_predictions.otsg"
+    compressor.extract_predictions(
+        tmp_path / compressor.name / "compressed.otsdq", extracted_path
+    )
+    extracted = list(GradientTraceReader(extracted_path).steps())
+    assert torch.equal(
+        predictions[0].gradients["matrix"], extracted[0].gradients["matrix"]
+    )
+    comparison_path = tmp_path / "prediction_comparison.jsonl"
+    compare_prediction_traces(source, extracted_path, comparison_path)
+    comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
+    assert comparison["step"] == 0
+    assert comparison["prediction_energy_r2"] > 0.999
+
+
+def test_rank1_rejects_invalid_iteration_count() -> None:
+    with pytest.raises(ValueError, match="rank1_power_iterations"):
+        OTSDeltaQCompressor(rank1_power_iterations=0)

@@ -42,7 +42,12 @@ def benchmark_deltaq(trace_path: Path, compressor: OTSDeltaQCompressor, destinat
     artifact = destination / "compressed.otsdq"
     decoded = destination / "decoded_gradients.otsg"
     started = time.perf_counter()
-    codec_stats = compressor.compress(trace_path, artifact)
+    codec_stats = compressor.compress(
+        trace_path,
+        artifact,
+        predictions_path=destination / "predictions.otsg",
+        prediction_metrics_path=destination / "prediction_metrics.jsonl",
+    )
     encode_seconds = time.perf_counter() - started
     return evaluate_deltaq_artifact(
         trace_path,
@@ -125,3 +130,46 @@ def refresh_codec_stats(metrics_path: Path, codec_stats: dict) -> None:
     metrics_path.write_text(
         json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+
+def compare_prediction_traces(
+    source: Path, predictions: Path, output: Path
+) -> None:
+    """Write plot-ready prediction differences for every recorded step."""
+
+    source_steps = GradientTraceReader(Path(source)).steps()
+    prediction_steps = GradientTraceReader(Path(predictions)).steps()
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    with Path(output).open("w", encoding="utf-8") as stream:
+        for original, predicted in zip(source_steps, prediction_steps):
+            if (
+                original.step != predicted.step
+                or original.gradients.keys() != predicted.gradients.keys()
+            ):
+                raise ValueError("prediction trace schema differs from source")
+            error = energy = prediction_energy = dot = 0.0
+            elements = 0
+            for name, value in original.gradients.items():
+                estimate = predicted.gradients[name]
+                if value is None and estimate is None:
+                    continue
+                if value is None or estimate is None or value.shape != estimate.shape:
+                    raise ValueError(f"prediction mismatch for {name}")
+                actual = value.to(torch.float64)
+                guess = estimate.to(torch.float64)
+                error += float(torch.sum((actual - guess).square()))
+                energy += float(torch.sum(actual.square()))
+                prediction_energy += float(torch.sum(guess.square()))
+                dot += float(torch.sum(actual * guess))
+                elements += actual.numel()
+            row = {
+                "step": original.step,
+                "elements": elements,
+                "prediction_energy_r2": 1.0 - error / max(energy, 1e-30),
+                "prediction_cosine_similarity": dot
+                / max((energy * prediction_energy) ** 0.5, 1e-30),
+                "prediction_relative_l2": (error / max(energy, 1e-30)) ** 0.5,
+            }
+            stream.write(json.dumps(row, sort_keys=True) + "\n")
+    if next(source_steps, None) is not None or next(prediction_steps, None) is not None:
+        raise ValueError("prediction trace has a different step count")

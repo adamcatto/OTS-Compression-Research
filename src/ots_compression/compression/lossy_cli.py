@@ -16,12 +16,14 @@ def main() -> int:
     parser.add_argument("--block-size", type=int, default=16_384)
     parser.add_argument("--relative-squared-error", type=float, default=1e-4)
     parser.add_argument("--outlier-fraction", type=float, default=0.0)
+    parser.add_argument("--rank1-power-iterations", type=int, default=1)
     parser.add_argument(
         "--prediction",
         choices=[
             "previous_decoded_gradient",
             "zero",
             "adaptive_zero_previous",
+            "rank1_tensor",
         ],
         default="previous_decoded_gradient",
     )
@@ -46,6 +48,7 @@ def main() -> int:
         relative_squared_error=args.relative_squared_error,
         prediction=args.prediction,
         outlier_fraction=args.outlier_fraction,
+        rank1_power_iterations=args.rank1_power_iterations,
     )
     mode = (
         "online"

@@ -103,7 +103,8 @@
                 "ots_deltaq_v1",
                 "ots_deltaq_zero_v1",
                 "ots_deltaq_adaptive_predictor_v1",
-                "ots_deltaq_outlier_v1"
+                "ots_deltaq_outlier_v1",
+                "ots_rank1_deltaq_e1"
               ]
             },
             "block_size": {
@@ -122,6 +123,10 @@
               "type": "number",
               "minimum": 0,
               "exclusiveMaximum": 1
+            },
+            "rank1_power_iterations": {
+              "type": "integer",
+              "minimum": 1
             }
           }
         }

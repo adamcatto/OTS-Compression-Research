@@ -25,7 +25,7 @@ from ...core.gradient_trace import GradientStep, GradientTraceReader, GradientTr
 
 
 _MAGIC = b"OTSDQ001"
-_VERSION = 3
+_VERSION = 4
 _FILE_HEADER = struct.Struct("<8sHI")
 _RECORD_HEADER = struct.Struct("<4sQIQ")
 _RECORD_MAGIC = b"STEP"
@@ -52,6 +52,10 @@ class DeltaQStats:
     int8_outlier_blocks: int
     int8_outlier_elements: int
     outlier_values: int
+    rank1_prediction_tensors: int
+    rank1_prediction_blocks: int
+    rank1_prediction_elements: int
+    rank1_factor_bytes: int
 
     def to_dict(self) -> dict:
         return {
@@ -70,6 +74,10 @@ class DeltaQStats:
             "int8_outlier_blocks": self.int8_outlier_blocks,
             "int8_outlier_elements": self.int8_outlier_elements,
             "outlier_values": self.outlier_values,
+            "rank1_prediction_tensors": self.rank1_prediction_tensors,
+            "rank1_prediction_blocks": self.rank1_prediction_blocks,
+            "rank1_prediction_elements": self.rank1_prediction_elements,
+            "rank1_factor_bytes": self.rank1_factor_bytes,
         }
 
 
@@ -115,6 +123,10 @@ class OTSDeltaQOnlineWriter:
             "int8_outlier_blocks": 0,
             "int8_outlier_elements": 0,
             "outlier_values": 0,
+            "rank1_prediction_tensors": 0,
+            "rank1_prediction_blocks": 0,
+            "rank1_prediction_elements": 0,
+            "rank1_factor_bytes": 0,
         }
         self._summary_path = Path(summary_path) if summary_path else None
         self._access_mode = access_mode
@@ -199,6 +211,10 @@ class OTSDeltaQOnlineWriter:
                         "int8_outlier_blocks",
                         "int8_outlier_elements",
                         "outlier_values",
+                        "rank1_prediction_tensors",
+                        "rank1_prediction_blocks",
+                        "rank1_prediction_elements",
+                        "rank1_factor_bytes",
                     )
                 },
                 encode_seconds=codec_seconds,
@@ -271,6 +287,7 @@ class OTSDeltaQCompressor:
         relative_squared_error: float = 1e-4,
         prediction: str = "previous_decoded_gradient",
         outlier_fraction: float = 0.0,
+        rank1_power_iterations: int = 1,
     ):
         if block_size <= 0:
             raise ValueError("block_size must be positive")
@@ -280,20 +297,26 @@ class OTSDeltaQCompressor:
             "previous_decoded_gradient",
             "zero",
             "adaptive_zero_previous",
+            "rank1_tensor",
         }:
             raise ValueError(
                 "prediction must be 'previous_decoded_gradient', 'zero', "
-                "or 'adaptive_zero_previous'"
+                "'adaptive_zero_previous', or 'rank1_tensor'"
             )
         if not 0.0 <= outlier_fraction < 1.0:
             raise ValueError("outlier_fraction must be in [0, 1)")
+        if rank1_power_iterations <= 0:
+            raise ValueError("rank1_power_iterations must be positive")
         self.block_size = block_size
         self.relative_squared_error = relative_squared_error
         self.prediction = prediction
         self.outlier_fraction = outlier_fraction
+        self.rank1_power_iterations = rank1_power_iterations
 
     @property
     def name(self) -> str:
+        if self.prediction == "rank1_tensor":
+            return "ots_rank1_deltaq_e1"
         if self.outlier_fraction:
             return "ots_deltaq_outlier_v1"
         if self.prediction == "zero":
@@ -311,6 +334,8 @@ class OTSDeltaQCompressor:
             "fallbacks": ["float16", "float32"],
             "outlier_fraction": self.outlier_fraction,
             "outlier_storage": "int32_index_plus_float16_value",
+            "rank1_power_iterations": self.rank1_power_iterations,
+            "rank1_factor_dtype": "float16",
         }
 
     def open_online(
@@ -335,12 +360,21 @@ class OTSDeltaQCompressor:
             access_mode=access_mode,
         )
 
-    def compress(self, trace_path: Path, artifact_path: Path) -> DeltaQStats:
+    def compress(
+        self,
+        trace_path: Path,
+        artifact_path: Path,
+        *,
+        predictions_path: Optional[Path] = None,
+        prediction_metrics_path: Optional[Path] = None,
+    ) -> DeltaQStats:
         trace_path, artifact_path = Path(trace_path), Path(artifact_path)
         reader = GradientTraceReader(trace_path)
         with self.open_online(
             artifact_path,
             source_metadata=reader.metadata,
+            predictions_path=predictions_path,
+            prediction_metrics_path=prediction_metrics_path,
             access_mode="causal_posthoc",
         ) as writer:
             for record in reader.steps():
@@ -366,8 +400,51 @@ class OTSDeltaQCompressor:
                         raise ValueError("invalid OTS-DeltaQ record")
                     metadata = json.loads(_read_exact(stream, metadata_size, "record metadata"))
                     payload = _read_exact(stream, payload_size, "record payload")
-                    gradients, decoded = self._decode_step(metadata, payload, predictors)
+                    gradients, decoded, _ = self._decode_step(metadata, payload, predictors)
                     writer.append(step, gradients)
+                    predictors.update(decoded)
+                    previous = step
+
+    def extract_predictions(
+        self, artifact_path: Path, predictions_path: Path
+    ) -> None:
+        """Recreate and store every decoder-side prediction without re-encoding."""
+
+        predictors: Dict[str, torch.Tensor] = {}
+        with Path(artifact_path).open("rb") as stream:
+            header = _read_header(stream)
+            source_metadata = header["source_metadata"]
+            extra_metadata = {
+                key: value
+                for key, value in source_metadata.items()
+                if key not in {"experiment_id", "format"}
+            }
+            extra_metadata["artifact_role"] = "decoder_predictions"
+            with GradientTraceWriter(
+                Path(predictions_path),
+                experiment_id=str(source_metadata["experiment_id"]),
+                metadata=extra_metadata,
+            ) as writer:
+                previous = -1
+                while True:
+                    fixed = stream.read(_RECORD_HEADER.size)
+                    if not fixed:
+                        return
+                    if len(fixed) != _RECORD_HEADER.size:
+                        raise ValueError("truncated OTS-DeltaQ record header")
+                    magic, step, metadata_size, payload_size = _RECORD_HEADER.unpack(
+                        fixed
+                    )
+                    if magic != _RECORD_MAGIC or step <= previous:
+                        raise ValueError("invalid OTS-DeltaQ record")
+                    metadata = json.loads(
+                        _read_exact(stream, metadata_size, "record metadata")
+                    )
+                    payload = _read_exact(stream, payload_size, "record payload")
+                    _, decoded, predictions = self._decode_step(
+                        metadata, payload, predictors
+                    )
+                    writer.append(step, predictions)
                     predictors.update(decoded)
                     previous = step
 
@@ -390,6 +467,10 @@ class OTSDeltaQCompressor:
             "int8_outlier_blocks": 0,
             "int8_outlier_elements": 0,
             "outlier_values": 0,
+            "rank1_prediction_tensors": 0,
+            "rank1_prediction_blocks": 0,
+            "rank1_prediction_elements": 0,
+            "rank1_factor_bytes": 0,
         }
         with Path(artifact_path).open("rb") as stream:
             header = _read_header(stream)
@@ -417,6 +498,12 @@ class OTSDeltaQCompressor:
                     elements = math.prod(descriptor["shape"])
                     cursor = int(descriptor["offset"])
                     end = cursor + int(descriptor["nbytes"])
+                    predictor_label = str(descriptor.get("prediction", ""))
+                    if predictor_label == "rank1":
+                        factor_bytes = int(descriptor["rank1_factor_nbytes"])
+                        counters["rank1_prediction_tensors"] += 1
+                        counters["rank1_factor_bytes"] += factor_bytes
+                        cursor += factor_bytes
                     remaining = elements
                     while remaining:
                         count = min(self.block_size, remaining)
@@ -448,18 +535,16 @@ class OTSDeltaQCompressor:
                             exception_bytes = 0
                         counters[f"{label}_blocks"] += 1
                         counters[f"{label}_elements"] += count
-                        if configuration.get("prediction") == "zero":
-                            predictor_label = "zero"
+                        if predictor_label == "rank1":
+                            predictor_counter = "rank1_prediction"
+                        elif configuration.get("prediction") == "zero":
+                            predictor_counter = "zero_prediction"
                         elif configuration.get("prediction") == "adaptive_zero_previous":
-                            predictor_label = "zero" if code & 0x04 else "previous_prediction"
+                            predictor_counter = "zero_prediction" if code & 0x04 else "previous_prediction"
                         else:
-                            predictor_label = "previous_prediction"
-                        if predictor_label == "zero":
-                            counters["zero_prediction_blocks"] += 1
-                            counters["zero_prediction_elements"] += count
-                        else:
-                            counters["previous_prediction_blocks"] += 1
-                            counters["previous_prediction_elements"] += count
+                            predictor_counter = "previous_prediction"
+                        counters[f"{predictor_counter}_blocks"] += 1
+                        counters[f"{predictor_counter}_elements"] += count
                         cursor += count * width + exception_bytes
                         remaining -= count
                     if cursor != end:
@@ -485,13 +570,35 @@ class OTSDeltaQCompressor:
                 continue
             value = tensor.detach().to(dtype=torch.float32, device="cpu").contiguous()
             prediction = self._prediction_for(name, value, predictors)
+            base_kind = "zero" if self.prediction == "zero" else "previous"
             encoded, reconstruction, selected_prediction, block_counts = (
-                self._encode_tensor(value, prediction)
+                self._encode_tensor(value, prediction, predictor_kind=base_kind)
             )
+            descriptor_extra = {}
+            if self.prediction == "rank1_tensor" and value.ndim == 2:
+                rank1 = self._encode_rank1_prediction(value)
+                if rank1 is not None:
+                    rank1_prediction, factors = rank1
+                    rank1_encoded, rank1_reconstruction, _, rank1_counts = (
+                        self._encode_tensor(
+                            value, rank1_prediction, predictor_kind="rank1"
+                        )
+                    )
+                    if len(factors) + len(rank1_encoded) < len(encoded):
+                        encoded = factors + rank1_encoded
+                        reconstruction = rank1_reconstruction
+                        selected_prediction = rank1_prediction
+                        block_counts = rank1_counts
+                        block_counts["rank1_prediction_tensors"] = 1
+                        block_counts["rank1_factor_bytes"] = len(factors)
+                        descriptor_extra = {
+                            "prediction": "rank1",
+                            "rank1_factor_nbytes": len(factors),
+                        }
             counters["tensors"] += 1
             for key, amount in block_counts.items():
                 counters[key] += amount
-            descriptors.append({"name": name, "present": True, "dtype": str(tensor.dtype).removeprefix("torch."), "shape": list(tensor.shape), "offset": offset, "nbytes": len(encoded)})
+            descriptors.append({"name": name, "present": True, "dtype": str(tensor.dtype).removeprefix("torch."), "shape": list(tensor.shape), "offset": offset, "nbytes": len(encoded), **descriptor_extra})
             payload_parts.append(encoded)
             offset += len(encoded)
             decoded[name] = reconstruction.reshape(value.shape)
@@ -503,26 +610,34 @@ class OTSDeltaQCompressor:
             selected_predictions,
         )
 
-    def _decode_step(self, metadata: Mapping[str, object], payload: bytes, predictors: Mapping[str, torch.Tensor]) -> Tuple[Dict[str, Optional[torch.Tensor]], Dict[str, torch.Tensor]]:
+    def _decode_step(self, metadata: Mapping[str, object], payload: bytes, predictors: Mapping[str, torch.Tensor]) -> Tuple[Dict[str, Optional[torch.Tensor]], Dict[str, torch.Tensor], Dict[str, Optional[torch.Tensor]]]:
         gradients: Dict[str, Optional[torch.Tensor]] = {}
         decoded: Dict[str, torch.Tensor] = {}
+        selected_predictions: Dict[str, Optional[torch.Tensor]] = {}
         for descriptor in metadata["tensors"]:  # type: ignore[index]
             name = descriptor["name"]  # type: ignore[index]
             if not descriptor.get("present", False):  # type: ignore[union-attr]
                 gradients[name] = None
+                selected_predictions[name] = None
                 continue
             shape = tuple(descriptor["shape"])  # type: ignore[index]
             prediction = self._prediction_for(
                 name, torch.zeros(shape, dtype=torch.float32), predictors
             )
             offset, nbytes = int(descriptor["offset"]), int(descriptor["nbytes"])
+            encoded = payload[offset : offset + nbytes]
+            if descriptor.get("prediction") == "rank1":  # type: ignore[union-attr]
+                factor_nbytes = int(descriptor["rank1_factor_nbytes"])  # type: ignore[index]
+                prediction = self._decode_rank1_prediction(encoded[:factor_nbytes], shape)
+                encoded = encoded[factor_nbytes:]
             reconstructed = self._decode_tensor(
-                payload[offset : offset + nbytes], prediction
+                encoded, prediction
             )
             dtype = getattr(torch, str(descriptor["dtype"]))
             gradients[name] = reconstructed.to(dtype=dtype).reshape(shape)
             decoded[name] = reconstructed.reshape(shape)
-        return gradients, decoded
+            selected_predictions[name] = prediction.reshape(shape)
+        return gradients, decoded, selected_predictions
 
     def _prediction_for(
         self,
@@ -538,7 +653,11 @@ class OTSDeltaQCompressor:
         return prediction
 
     def _encode_tensor(
-        self, value: torch.Tensor, prediction: torch.Tensor
+        self,
+        value: torch.Tensor,
+        prediction: torch.Tensor,
+        *,
+        predictor_kind: Optional[str] = None,
     ) -> Tuple[bytes, torch.Tensor, torch.Tensor, dict]:
         source, previous = value.reshape(-1), prediction.reshape(-1)
         output = io.BytesIO()
@@ -558,7 +677,13 @@ class OTSDeltaQCompressor:
             "int8_outlier_blocks": 0,
             "int8_outlier_elements": 0,
             "outlier_values": 0,
+            "rank1_prediction_tensors": 0,
+            "rank1_prediction_blocks": 0,
+            "rank1_prediction_elements": 0,
+            "rank1_factor_bytes": 0,
         }
+        if predictor_kind is None:
+            predictor_kind = "zero" if self.prediction == "zero" else "previous"
         for offset in range(0, source.numel(), self.block_size):
             current = source[offset : offset + self.block_size]
             previous_block = previous[offset : offset + self.block_size]
@@ -571,7 +696,7 @@ class OTSDeltaQCompressor:
                     candidates, key=lambda candidate: (len(candidate[2]), candidate[4])
                 )
             else:
-                predictor_id = 1 if self.prediction == "zero" else 0
+                predictor_id = 1 if predictor_kind == "zero" else 0
                 predicted = previous_block
                 mode, scale, encoded, restored, error, _, _ = self._encode_candidate(
                     current, predicted, predictor_id
@@ -595,11 +720,50 @@ class OTSDeltaQCompressor:
                     encoded, 0
                 )[0]
             predictor_label = (
-                "zero_prediction" if predictor_id else "previous_prediction"
+                "rank1_prediction"
+                if predictor_kind == "rank1"
+                else ("zero_prediction" if predictor_id else "previous_prediction")
             )
             counts[f"{predictor_label}_blocks"] += 1
             counts[f"{predictor_label}_elements"] += current.numel()
         return output.getvalue(), reconstruction, selected_prediction, counts
+
+    def _encode_rank1_prediction(
+        self, value: torch.Tensor
+    ) -> Optional[Tuple[torch.Tensor, bytes]]:
+        rows, columns = value.shape
+        if rows < 2 or columns < 2:
+            return None
+        right = torch.ones(columns, dtype=torch.float32) / math.sqrt(columns)
+        for _ in range(self.rank1_power_iterations):
+            left = value.mv(right)
+            right = value.T.mv(left)
+            norm = float(torch.linalg.vector_norm(right))
+            if norm == 0.0:
+                return None
+            right /= norm
+        left = value.mv(right)
+        left_half, right_half = left.to(torch.float16), right.to(torch.float16)
+        decoded_left = left_half.to(torch.float32)
+        decoded_right = right_half.to(torch.float32)
+        prediction = torch.outer(decoded_left, decoded_right)
+        factors = left_half.numpy().tobytes() + right_half.numpy().tobytes()
+        return prediction, factors
+
+    @staticmethod
+    def _decode_rank1_prediction(
+        payload: bytes, shape: Tuple[int, ...]
+    ) -> torch.Tensor:
+        if len(shape) != 2:
+            raise ValueError("rank1 prediction requires a matrix tensor")
+        rows, columns = shape
+        expected = 2 * (rows + columns)
+        if len(payload) != expected:
+            raise ValueError("invalid rank1 factor payload")
+        factors = torch.frombuffer(bytearray(payload), dtype=torch.float16)
+        left = factors[:rows].to(torch.float32)
+        right = factors[rows:].to(torch.float32)
+        return torch.outer(left, right)
 
     def _encode_candidate(
         self,
@@ -855,6 +1019,10 @@ def summarize_prediction_metrics(path: Path) -> Dict[str, Any]:
                 "int8_outlier_blocks",
                 "int8_outlier_elements",
                 "outlier_values",
+                "rank1_prediction_tensors",
+                "rank1_prediction_blocks",
+                "rank1_prediction_elements",
+                "rank1_factor_bytes",
             )
             if all(field in row for row in rows)
         },
@@ -885,6 +1053,6 @@ def _read_exact(stream, count: int, context: str) -> bytes:
 
 def _read_header(stream) -> Mapping[str, object]:
     magic, version, size = _FILE_HEADER.unpack(_read_exact(stream, _FILE_HEADER.size, "header"))
-    if magic != _MAGIC or version not in {1, 2, 3}:
+    if magic != _MAGIC or version not in {1, 2, 3, 4}:
         raise ValueError("not a supported OTS-DeltaQ artifact")
     return json.loads(_read_exact(stream, size, "header metadata"))
